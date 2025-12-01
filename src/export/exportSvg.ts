@@ -1,5 +1,5 @@
 import { Scene } from '../model/scene';
-import { Rotation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
+import { ProjectionType, Rotation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
 
 interface ExportOptions {
   showGuides?: boolean;
@@ -19,7 +19,7 @@ function formatPoints(points: { x: number; y: number }[]): string {
   return points.map((p) => `${p.x},${p.y}`).join(' ');
 }
 
-function buildGuideLines(rotation: Rotation): string[] {
+function buildGuideLines(rotation: Rotation, projection: ProjectionType): string[] {
   const divisions = 8;
   const steps = 64;
   const lines: string[] = [];
@@ -32,8 +32,8 @@ function buildGuideLines(rotation: Rotation): string[] {
 
     for (let j = 0; j <= steps; j += 1) {
       const t = j / steps;
-      const meridianPoint = uvPointToXY({ u: uConst, v: t }, rotation);
-      const parallelPoint = uvPointToXY({ u: t, v: vConst }, rotation);
+      const meridianPoint = uvPointToXY({ u: uConst, v: t }, rotation, projection);
+      const parallelPoint = uvPointToXY({ u: t, v: vConst }, rotation, projection);
       if (meridianPoint) meridian.push(meridianPoint);
       if (parallelPoint) parallel.push(parallelPoint);
     }
@@ -45,12 +45,17 @@ function buildGuideLines(rotation: Rotation): string[] {
   return lines;
 }
 
-export function exportSphereSvg(scene: Scene, rotation: Rotation, options: ExportOptions = {}): string {
+export function exportSphereSvg(
+  scene: Scene,
+  rotation: Rotation,
+  options: ExportOptions = {},
+  projection: ProjectionType = 'orthographic',
+): string {
   const viewBox = '-1.1 -1.1 2.2 2.2';
   const { showGuides = false } = options;
 
   const guideMarkup = showGuides
-    ? buildGuideLines(rotation)
+    ? buildGuideLines(rotation, projection)
         .map(
           (points) =>
             `<polyline points="${points}" fill="none" stroke="#e0e0e0" stroke-width="0.004" stroke-linecap="round" stroke-linejoin="round" />`,
@@ -61,7 +66,7 @@ export function exportSphereSvg(scene: Scene, rotation: Rotation, options: Expor
   const shapesMarkup = scene.shapes
     .map((shape) => {
       const sampleDensity = shape.type === 'circle' ? 160 : 120;
-      const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity);
+      const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity, projection);
       if (points.length < 2) return null;
       if (closed && shape.type !== 'line') {
         const closedPts = ensureClosed(points);

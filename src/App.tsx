@@ -2,8 +2,10 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { UVEditor } from './uv/UVEditor';
 import { SpherePreview } from './sphere/SpherePreview';
 import { initialScene, Scene, Shape } from './model/scene';
-import { Rotation } from './geometry/projection';
+import { ProjectionType, Rotation } from './geometry/projection';
 import { exportSphereSvg } from './export/exportSvg';
+import { sceneToUvSvg, uvSvgToShapes } from './export/uvSvg';
+import { JojosphereState, parseJojosphere, serializeJojosphere } from './export/jojosphere';
 
 const degToRad = (deg: number) => (deg * Math.PI) / 180;
 
@@ -19,6 +21,12 @@ const App: React.FC = () => {
   const [history, setHistory] = useState<Scene[]>([]);
   const [future, setFuture] = useState<Scene[]>([]);
   const sceneRef = useRef(scene);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const jojosphereInputRef = useRef<HTMLInputElement | null>(null);
+  const [requireMarker, setRequireMarker] = useState(true);
+  const [showGradient, setShowGradient] = useState(false);
+  const [showDots, setShowDots] = useState(false);
+  const [projectionType, setProjectionType] = useState<ProjectionType>('orthographic');
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -65,6 +73,13 @@ const App: React.FC = () => {
     }));
   };
 
+  const handleDeleteSelected = () => {
+    if (!selectedId) return;
+    pushHistory();
+    setScene((prev) => ({ shapes: prev.shapes.filter((s) => s.id !== selectedId) }));
+    setSelectedId(null);
+  };
+
   const handleUndo = () => {
     if (!history.length) return;
     const prev = history[history.length - 1];
@@ -75,7 +90,7 @@ const App: React.FC = () => {
   };
 
   const handleExport = () => {
-    const svgString = exportSphereSvg(scene, rotation, { showGuides });
+    const svgString = exportSphereSvg(scene, rotation, { showGuides }, projectionType);
     const blob = new Blob([svgString], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -85,6 +100,85 @@ const App: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const handleSaveUv = () => {
+    const svg = sceneToUvSvg(scene);
+    const blob = new Blob([svg], { type: 'image/svg+xml' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'uv-scene.svg';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleLoadUv = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      const text = reader.result as string;
+      try {
+        const shapes = uvSvgToShapes(text, requireMarker);
+        pushHistory();
+        setScene({ shapes });
+        setSelectedId(null);
+      } catch (err) {
+        // eslint-disable-next-line no-alert
+        alert((err as Error).message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const handleSaveJojosphere = () => {
+    const data: JojosphereState = {
+      version: 1,
+      rotation: { rotX, rotY, rotZ },
+      showGuides,
+      showGradient,
+      showDots,
+      projection: projectionType,
+      scene,
+    };
+    const json = serializeJojosphere(data);
+    const blob = new Blob([json], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'scene.jojosphere';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleLoadJojosphere = (file: File) => {
+    const reader = new FileReader();
+    reader.onload = () => {
+      try {
+        const state = parseJojosphere(reader.result as string);
+        pushHistory();
+        setScene(state.scene);
+        setRotX(state.rotation.rotX);
+        setRotY(state.rotation.rotY);
+        setRotZ(state.rotation.rotZ);
+        setShowGuides(state.showGuides);
+        setShowGradient(state.showGradient);
+        setShowDots(state.showDots);
+        setProjectionType(state.projection);
+        setSelectedId(null);
+      } catch (err) {
+        // eslint-disable-next-line no-alert
+        alert((err as Error).message);
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const triggerLoadUv = () => {
+    fileInputRef.current?.click();
   };
 
   return (
@@ -106,63 +200,33 @@ const App: React.FC = () => {
           <span>{rotZ}</span>
         </label>
         <label className="checkbox">
-          <input type="checkbox" checked={showGuides} onChange={(e) => setShowGuides(e.target.checked)} />
-          Show UV guides
+          Projection scheme
+          <select value={projectionType} onChange={(e) => setProjectionType(e.target.value as ProjectionType)}>
+            <option value="orthographic">Orthographic</option>
+            <option value="perspective">Perspective</option>
+            <option value="stereographic">Stereographic</option>
+          </select>
         </label>
 
-        <div className="color-controls">
-          {selectedShape ? (
-            <>
-              <span>Selected: {selectedShape.type}</span>
-              <label>
-                Stroke
-                <input
-                  type="color"
-                  value={strokeInput}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setStrokeInput(value);
-                    if (!selectedId) return;
-                    handleUpdateShape(
-                      selectedId,
-                      (s) => ({
-                        ...s,
-                        stroke: value,
-                      }),
-                      true,
-                    );
-                  }}
-                />
-              </label>
-              <label>
-                Fill
-                <input
-                  type="color"
-                  value={fillInput}
-                  disabled={selectedShape.type === 'line'}
-                  onChange={(e) => {
-                    const value = e.target.value;
-                    setFillInput(value);
-                    if (!selectedId) return;
-                    handleUpdateShape(
-                      selectedId,
-                      (s) => {
-                        if (s.type === 'line') return s;
-                        return { ...s, fill: value };
-                      },
-                      true,
-                    );
-                  }}
-                />
-              </label>
-            </>
-          ) : (
-            <span>No selection</span>
-          )}
-        </div>
         <button type="button" className="secondary-button" onClick={handleUndo} disabled={!history.length}>
           Undo
         </button>
+        <button type="button" className="secondary-button" onClick={handleSaveUv}>
+          Save UV SVG
+        </button>
+        <button type="button" className="secondary-button" onClick={triggerLoadUv}>
+          Load UV SVG
+        </button>
+        <button type="button" className="secondary-button" onClick={handleSaveJojosphere}>
+          Save .jojosphere
+        </button>
+        <button type="button" className="secondary-button" onClick={() => jojosphereInputRef.current?.click()}>
+          Load .jojosphere
+        </button>
+        <label className="checkbox">
+          <input type="checkbox" checked={requireMarker} onChange={(e) => setRequireMarker(e.target.checked)} />
+          File import compatibility check
+        </label>
 
         <button type="button" className="export-button" onClick={handleExport}>
           Export sphere SVG
@@ -178,9 +242,71 @@ const App: React.FC = () => {
           onStartShapeTransform={pushHistory}
           onTransformShape={(id, shape) => handleUpdateShape(id, () => shape, false)}
           showGuides={showGuides}
+          showGradient={showGradient}
+          showDots={showDots}
+          selectedShape={selectedShape}
+          strokeInput={strokeInput}
+          fillInput={fillInput}
+          onStrokeChange={(value) => {
+            setStrokeInput(value);
+            if (!selectedId) return;
+            handleUpdateShape(
+              selectedId,
+              (s) => ({
+                ...s,
+                stroke: value,
+              }),
+              true,
+            );
+          }}
+          onFillChange={(value) => {
+            setFillInput(value);
+            if (!selectedId) return;
+            handleUpdateShape(
+              selectedId,
+              (s) => {
+                if (s.type === 'line') return s;
+                return { ...s, fill: value };
+              },
+              true,
+            );
+          }}
+          onDeleteSelected={handleDeleteSelected}
         />
-        <SpherePreview scene={scene} rotation={rotation} showGuides={showGuides} />
+        <SpherePreview
+          scene={scene}
+          rotation={rotation}
+          showGuides={showGuides}
+          showGradient={showGradient}
+          showDots={showDots}
+          projectionType={projectionType}
+          onToggleGuides={(next) => setShowGuides(next)}
+          onToggleGradient={(next) => setShowGradient(next)}
+          onToggleDots={(next) => setShowDots(next)}
+        />
       </main>
+      <input
+        ref={jojosphereInputRef}
+        type="file"
+        accept=".jojosphere,application/json"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleLoadJojosphere(file);
+          e.target.value = '';
+        }}
+      />
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/svg+xml"
+        style={{ display: 'none' }}
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleLoadUv(file);
+          e.target.value = '';
+        }}
+      />
     </div>
   );
 };

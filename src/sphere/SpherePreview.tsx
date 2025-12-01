@@ -1,11 +1,17 @@
 import React, { useMemo } from 'react';
 import { Scene } from '../model/scene';
-import { Rotation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
+import { ProjectionType, Rotation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
 
 interface SpherePreviewProps {
   scene: Scene;
   rotation: Rotation;
   showGuides: boolean;
+  showGradient: boolean;
+  showDots: boolean;
+  projectionType: ProjectionType;
+  onToggleGuides: (next: boolean) => void;
+  onToggleGradient: (next: boolean) => void;
+  onToggleDots: (next: boolean) => void;
 }
 
 function ensureClosed(points: { x: number; y: number }[]): { x: number; y: number }[] {
@@ -22,7 +28,7 @@ function formatPoints(points: { x: number; y: number }[]): string {
   return points.map((p) => `${p.x},${p.y}`).join(' ');
 }
 
-function buildGuideLines(rotation: Rotation): string[] {
+function buildGuideLines(rotation: Rotation, scheme: ProjectionType): string[] {
   const divisions = 8;
   const steps = 64;
   const lines: string[] = [];
@@ -35,8 +41,8 @@ function buildGuideLines(rotation: Rotation): string[] {
 
     for (let j = 0; j <= steps; j += 1) {
       const t = j / steps;
-      const meridianPoint = uvPointToXY({ u: uConst, v: t }, rotation);
-      const parallelPoint = uvPointToXY({ u: t, v: vConst }, rotation);
+      const meridianPoint = uvPointToXY({ u: uConst, v: t }, rotation, scheme);
+      const parallelPoint = uvPointToXY({ u: t, v: vConst }, rotation, scheme);
       if (meridianPoint) meridian.push(meridianPoint);
       if (parallelPoint) parallel.push(parallelPoint);
     }
@@ -52,15 +58,116 @@ function buildGuideLines(rotation: Rotation): string[] {
   return lines;
 }
 
-export const SpherePreview: React.FC<SpherePreviewProps> = ({ scene, rotation, showGuides }) => {
-  const guideLines = useMemo(() => (showGuides ? buildGuideLines(rotation) : []), [rotation, showGuides]);
+function lerp(a: number, b: number, t: number): number {
+  return a + (b - a) * t;
+}
+
+function cornerColor(u: number, v: number): string {
+  const c00 = { r: 255, g: 0, b: 0 };
+  const c10 = { r: 0, g: 255, b: 0 };
+  const c01 = { r: 0, g: 0, b: 255 };
+  const c11 = { r: 255, g: 255, b: 0 };
+  const r = lerp(lerp(c00.r, c10.r, u), lerp(c01.r, c11.r, u), v);
+  const g = lerp(lerp(c00.g, c10.g, u), lerp(c01.g, c11.g, u), v);
+  const b = lerp(lerp(c00.b, c10.b, u), lerp(c01.b, c11.b, u), v);
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
+
+function buildGradientCells(rotation: Rotation, projectionType: ProjectionType, divisions = 18): { pts: string; color: string }[] {
+  const cells: { pts: string; color: string }[] = [];
+  for (let i = 0; i < divisions; i += 1) {
+    for (let j = 0; j < divisions; j += 1) {
+      const u0 = i / divisions;
+      const v0 = j / divisions;
+      const u1 = (i + 1) / divisions;
+      const v1 = (j + 1) / divisions;
+      const corners = [
+        { u: u0, v: v0 },
+        { u: u1, v: v0 },
+        { u: u1, v: v1 },
+        { u: u0, v: v1 },
+      ];
+      const projected = corners.map((c) => uvPointToXY(c, rotation, projectionType));
+      if (projected.some((p) => !p)) continue;
+      const pts = formatPoints(projected as { x: number; y: number }[]);
+      const color = cornerColor((u0 + u1) / 2, (v0 + v1) / 2);
+      cells.push({ pts, color });
+    }
+  }
+  return cells;
+}
+
+export const SpherePreview: React.FC<SpherePreviewProps> = ({
+  scene,
+  rotation,
+  showGuides,
+  showGradient,
+  showDots,
+  projectionType,
+  onToggleGuides,
+  onToggleGradient,
+  onToggleDots,
+}) => {
+  const guideLines = useMemo(() => (showGuides ? buildGuideLines(rotation, projectionType) : []), [rotation, showGuides, projectionType]);
+  const gradientCells = useMemo(
+    () => (showGradient ? buildGradientCells(rotation, projectionType) : []),
+    [rotation, showGradient, projectionType],
+  );
+  const dots = useMemo(() => {
+    if (!showDots && !showGradient) return [];
+    const divs = 8;
+    const points: { x: number; y: number; color: string }[] = [];
+    for (let i = 0; i <= divs; i += 1) {
+      for (let j = 0; j <= divs; j += 1) {
+        const u = i / divs;
+        const v = j / divs;
+        const proj = uvPointToXY({ u, v }, rotation, projectionType);
+        if (proj) {
+          points.push({ x: proj.x, y: proj.y, color: cornerColor(u, v) });
+        }
+      }
+    }
+    return points;
+  }, [rotation, showDots, showGradient, projectionType]);
 
   return (
     <div className="panel">
-      <div className="panel-header">Sphere Preview</div>
+      <div className="panel-header">
+        <span>Sphere Preview</span>
+        <div className="checkbox-group">
+          <label className="checkbox">
+            <input type="checkbox" checked={showGuides} onChange={(e) => onToggleGuides(e.target.checked)} />
+            Show guides
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={showGradient} onChange={(e) => onToggleGradient(e.target.checked)} />
+            Gradient
+          </label>
+          <label className="checkbox">
+            <input type="checkbox" checked={showDots} onChange={(e) => onToggleDots(e.target.checked)} />
+            Dots
+          </label>
+        </div>
+      </div>
       <div className="panel-body">
         <svg viewBox="-1.1 -1.1 2.2 2.2">
           <circle cx={0} cy={0} r={1} fill="#fafafa" stroke="#cccccc" strokeWidth={0.01} />
+
+          {showGradient && (
+            <g opacity={0.5}>
+              {gradientCells.map((cell, idx) => (
+                <polygon key={`grad-${idx}`} points={cell.pts} fill={cell.color} stroke="none" />
+              ))}
+            </g>
+          )}
+
+          {(showGradient || showDots) && (
+            <g>
+              {dots.map((p, idx) => (
+                <circle key={`dot-${idx}`} cx={p.x} cy={p.y} r={0.01} fill={p.color} opacity={showGradient ? 0.7 : 1} />
+              ))}
+            </g>
+          )}
 
           {showGuides && (
             <g stroke="#e0e0e0" strokeWidth={0.004} fill="none">
@@ -73,7 +180,7 @@ export const SpherePreview: React.FC<SpherePreviewProps> = ({ scene, rotation, s
           <g>
             {scene.shapes.map((shape) => {
               const sampleDensity = shape.type === 'circle' ? 128 : 96;
-              const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity);
+              const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity, projectionType);
               if (points.length < 2) return null;
               const stroke = shape.stroke;
               const strokeWidth = shape.strokeWidth * 2; // Slightly thicker for visibility on sphere

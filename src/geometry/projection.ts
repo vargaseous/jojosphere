@@ -1,5 +1,7 @@
 import { CircleShape, LineShape, RectShape, Shape, Vec2 } from '../model/scene';
 
+export type ProjectionType = 'orthographic' | 'perspective' | 'stereographic';
+
 export interface Rotation {
   rx: number;
   ry: number;
@@ -62,10 +64,26 @@ export function projectOrthographic(p: Vec3): Vec2XY | null {
   return { x: p.x, y: p.y };
 }
 
-export function uvPointToXY(point: Vec2, rotation: Rotation): Vec2XY | null {
+function projectPerspective(p: Vec3, cameraZ = 3): Vec2XY | null {
+  const denom = cameraZ - p.z;
+  if (denom <= 0) return null;
+  const x = (p.x * cameraZ) / denom;
+  const y = (p.y * cameraZ) / denom;
+  return { x, y };
+}
+
+function projectStereographic(p: Vec3): Vec2XY | null {
+  const denom = 1 - p.z;
+  if (denom <= 1e-6) return null;
+  return { x: p.x / denom, y: p.y / denom };
+}
+
+export function uvPointToXY(point: Vec2, rotation: Rotation, projection: ProjectionType = 'orthographic'): Vec2XY | null {
   const spherePoint = uvToSphere(point.u, point.v);
   const rotated = applyRotation(spherePoint, rotation);
-  return projectOrthographic(rotated);
+  if (projection === 'orthographic') return projectOrthographic(rotated);
+  if (projection === 'perspective') return projectPerspective(rotated);
+  return projectStereographic(rotated);
 }
 
 interface TessellatedShape {
@@ -258,10 +276,121 @@ function clipPolygon2D(subject: Vec2XY[], clipper: Vec2XY[]): Vec2XY[] {
   return output;
 }
 
+function polygonArea(points: Vec2XY[]): number {
+  let area = 0;
+  for (let i = 0; i < points.length; i += 1) {
+    const p1 = points[i];
+    const p2 = points[(i + 1) % points.length];
+    area += p1.x * p2.y - p2.x * p1.y;
+  }
+  return area / 2;
+}
+
+function segmentCircleIntersections(p0: Vec2XY, p1: Vec2XY): { point: Vec2XY; t: number }[] {
+  const dx = p1.x - p0.x;
+  const dy = p1.y - p0.y;
+  const a = dx * dx + dy * dy;
+  const b = 2 * (p0.x * dx + p0.y * dy);
+  const c = p0.x * p0.x + p0.y * p0.y - 1;
+  const disc = b * b - 4 * a * c;
+  if (disc < 0) return [];
+  const sqrtDisc = Math.sqrt(disc);
+  const t1 = (-b - sqrtDisc) / (2 * a);
+  const t2 = (-b + sqrtDisc) / (2 * a);
+  const result: { point: Vec2XY; t: number }[] = [];
+  if (t1 >= 0 && t1 <= 1) result.push({ point: { x: p0.x + t1 * dx, y: p0.y + t1 * dy }, t: t1 });
+  if (t2 >= 0 && t2 <= 1 && Math.abs(t2 - t1) > 1e-6) {
+    result.push({ point: { x: p0.x + t2 * dx, y: p0.y + t2 * dy }, t: t2 });
+  }
+  return result.sort((a, b) => a.t - b.t);
+}
+
+function arcPoints(from: Vec2XY, to: Vec2XY, ccw: boolean, segments = 32): Vec2XY[] {
+  const a0 = Math.atan2(from.y, from.x);
+  let a1 = Math.atan2(to.y, to.x);
+  let delta = a1 - a0;
+  if (ccw && delta <= 0) delta += Math.PI * 2;
+  if (!ccw && delta >= 0) delta -= Math.PI * 2;
+
+  const steps = Math.max(4, Math.ceil(Math.abs(delta) / (Math.PI / 90))); // ~2° steps
+  const pts: Vec2XY[] = [];
+  for (let i = 1; i < steps; i += 1) {
+    const t = i / steps;
+    const ang = a0 + delta * t;
+    pts.push({ x: Math.cos(ang), y: Math.sin(ang) });
+  }
+  pts.push(to);
+  return pts;
+}
+
+function clipFillWithArcs(points: Vec2XY[]): Vec2XY[] {
+  if (points.length === 0) return [];
+  const inside = (p: Vec2XY) => p.x * p.x + p.y * p.y <= 1 + 1e-9;
+  const ccw = polygonArea(points) >= 0;
+
+  let output: Vec2XY[] = [];
+  let pendingArcStart: Vec2XY | null = null;
+
+  let prev = points[points.length - 1];
+  let prevInside = inside(prev);
+
+  for (const curr of points) {
+    const currInside = inside(curr);
+    const intersections = segmentCircleIntersections(prev, curr);
+
+    if (prevInside && currInside) {
+      // entirely inside
+      output.push(curr);
+    } else if (prevInside && !currInside) {
+      // exiting
+      const exitPt = intersections[0]?.point;
+      if (exitPt) {
+        output.push(exitPt);
+        pendingArcStart = exitPt;
+      }
+    } else if (!prevInside && currInside) {
+      // entering
+      const entryPt = intersections[intersections.length - 1]?.point;
+      if (entryPt) {
+        if (pendingArcStart) {
+          output.push(...arcPoints(pendingArcStart, entryPt, ccw));
+          pendingArcStart = null;
+        } else {
+          output.push(entryPt);
+        }
+      }
+      output.push(curr);
+    } else {
+      // outside-outside
+      if (intersections.length === 2) {
+        const [entry, exit] = intersections;
+        if (pendingArcStart) {
+          output.push(...arcPoints(pendingArcStart, entry.point, ccw));
+          pendingArcStart = null;
+        }
+        output.push(entry.point);
+        output.push(exit.point);
+        pendingArcStart = exit.point;
+      }
+    }
+
+    prev = curr;
+    prevInside = currInside;
+  }
+
+  if (pendingArcStart && output.length) {
+    const first = output[0];
+    output.push(...arcPoints(pendingArcStart, first, ccw));
+  }
+
+  return output;
+}
+
 export function projectShapeToXY(
   shape: Shape,
   rotation: Rotation,
   samples = 32,
+  projection: ProjectionType = 'orthographic',
 ): { points: Vec2XY[]; closed: boolean } {
   const { points: uvPoints, closed } = tessellateShape(shape, samples);
   const rotated: Vec3[] = uvPoints.map((uv) => applyRotation(uvToSphere(uv.u, uv.v), rotation));
@@ -269,13 +398,12 @@ export function projectShapeToXY(
 
   let projected: Vec2XY[] = [];
   for (const p of clipped3D) {
-    const xy = projectOrthographic(p);
+    const xy = projection === 'orthographic' ? projectOrthographic(p) : projection === 'perspective' ? projectPerspective(p) : projectStereographic(p);
     if (xy) projected.push(xy);
   }
 
-  if (closed && shape.type !== 'line') {
-    const circle = approximateUnitCircle(96);
-    projected = clipPolygon2D(projected, circle);
+  if (closed && shape.type !== 'line' && projection === 'orthographic') {
+    projected = clipFillWithArcs(projected);
   }
 
   return { points: projected, closed };

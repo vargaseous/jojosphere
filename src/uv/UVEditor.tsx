@@ -11,7 +11,17 @@ interface UVEditorProps {
   onStartShapeTransform: () => void;
   onTransformShape: (id: string, shape: Shape) => void;
   showGuides: boolean;
+  showGradient: boolean;
+  showDots: boolean;
+  selectedShape: Shape | null;
+  strokeInput: string;
+  fillInput: string;
+  onStrokeChange: (value: string) => void;
+  onFillChange: (value: string) => void;
+  onDeleteSelected: () => void;
 }
+
+type HandleKind = 'move' | 'rect' | 'circle' | 'line-start' | 'line-end';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -58,6 +68,56 @@ function shapeBounds(shape: Shape): { minU: number; maxU: number; minV: number; 
   };
 }
 
+function rectHandles(shape: Extract<Shape, { type: 'rect' }>): Vec2[] {
+  const corners: Vec2[] = [
+    { u: shape.origin.u, v: shape.origin.v },
+    { u: shape.origin.u + shape.size.w, v: shape.origin.v },
+    { u: shape.origin.u + shape.size.w, v: shape.origin.v + shape.size.h },
+    { u: shape.origin.u, v: shape.origin.v + shape.size.h },
+  ];
+  return corners;
+}
+
+function circleHandle(shape: Extract<Shape, { type: 'circle' }>): Vec2 {
+  return { u: shape.center.u + shape.radius, v: shape.center.v };
+}
+
+function lineHandles(shape: Extract<Shape, { type: 'line' }>): { start: Vec2; end: Vec2 } {
+  return { start: shape.a, end: shape.b };
+}
+
+function moveShape(shape: Shape, du: number, dv: number): Shape {
+  if (shape.type === 'line') {
+    return {
+      ...shape,
+      a: { u: shape.a.u + du, v: shape.a.v + dv },
+      b: { u: shape.b.u + du, v: shape.b.v + dv },
+    };
+  }
+  if (shape.type === 'rect') {
+    return {
+      ...shape,
+      origin: { u: shape.origin.u + du, v: shape.origin.v + dv },
+    };
+  }
+  return {
+    ...shape,
+    center: { u: shape.center.u + du, v: shape.center.v + dv },
+  };
+}
+
+function cornerColor(u: number, v: number): string {
+  const c00 = { r: 255, g: 0, b: 0 }; // top-left
+  const c10 = { r: 0, g: 255, b: 0 }; // top-right
+  const c01 = { r: 0, g: 0, b: 255 }; // bottom-left
+  const c11 = { r: 255, g: 255, b: 0 }; // bottom-right
+  const lerp = (a: number, b: number, t: number) => a + (b - a) * t;
+  const r = lerp(lerp(c00.r, c10.r, u), lerp(c01.r, c11.r, u), v);
+  const g = lerp(lerp(c00.g, c10.g, u), lerp(c01.g, c11.g, u), v);
+  const b = lerp(lerp(c00.b, c10.b, u), lerp(c01.b, c11.b, u), v);
+  return `rgb(${Math.round(r)}, ${Math.round(g)}, ${Math.round(b)})`;
+}
+
 export const UVEditor: React.FC<UVEditorProps> = ({
   scene,
   onAddShape,
@@ -66,6 +126,14 @@ export const UVEditor: React.FC<UVEditorProps> = ({
   onStartShapeTransform,
   onTransformShape,
   showGuides,
+  showGradient,
+  showDots,
+  selectedShape,
+  strokeInput,
+  fillInput,
+  onStrokeChange,
+  onFillChange,
+  onDeleteSelected,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [activeTool, setActiveTool] = useState<Tool>('line');
@@ -74,11 +142,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
   const [movingId, setMovingId] = useState<string | null>(null);
   const [movingStart, setMovingStart] = useState<Vec2 | null>(null);
   const [movingSnapshot, setMovingSnapshot] = useState<Shape | null>(null);
-
-  const selectedShape = useMemo(() => {
-    if (!selectedId) return null;
-    return scene.shapes.find((s) => s.id === selectedId) ?? null;
-  }, [scene.shapes, selectedId]);
+  const [activeHandle, setActiveHandle] = useState<HandleKind>('move');
 
   const selectionBox = useMemo(() => {
     if (!selectedShape) return null;
@@ -91,6 +155,23 @@ export const UVEditor: React.FC<UVEditorProps> = ({
       h: maxV - minV + padding * 2,
     };
   }, [selectedShape]);
+
+  const gradientCells = useMemo(() => {
+    if (!showGradient) return [];
+    const divs = 18;
+    const cells: { u: number; v: number; w: number; h: number; color: string }[] = [];
+    for (let i = 0; i < divs; i += 1) {
+      for (let j = 0; j < divs; j += 1) {
+        const u0 = i / divs;
+        const v0 = j / divs;
+        const u1 = (i + 1) / divs;
+        const v1 = (j + 1) / divs;
+        const color = cornerColor((u0 + u1) / 2, (v0 + v1) / 2);
+        cells.push({ u: u0, v: v0, w: u1 - u0, h: v1 - v0, color });
+      }
+    }
+    return cells;
+  }, [showGradient]);
 
   const previewShape = useMemo(() => {
     if (!dragStart || !dragCurrent) return null;
@@ -126,22 +207,24 @@ export const UVEditor: React.FC<UVEditorProps> = ({
     if (movingId && movingSnapshot && movingStart) {
       const du = uv.u - movingStart.u;
       const dv = uv.v - movingStart.v;
-      const updated: Shape =
-        movingSnapshot.type === 'line'
-          ? {
-              ...movingSnapshot,
-              a: { u: movingSnapshot.a.u + du, v: movingSnapshot.a.v + dv },
-              b: { u: movingSnapshot.b.u + du, v: movingSnapshot.b.v + dv },
-            }
-          : movingSnapshot.type === 'rect'
-            ? {
-                ...movingSnapshot,
-                origin: { u: movingSnapshot.origin.u + du, v: movingSnapshot.origin.v + dv },
-              }
-            : {
-                ...movingSnapshot,
-                center: { u: movingSnapshot.center.u + du, v: movingSnapshot.center.v + dv },
-              };
+      let updated: Shape = movingSnapshot;
+
+      if (activeHandle === 'move') {
+        updated = moveShape(movingSnapshot, du, dv);
+      } else if (activeHandle === 'rect' && movingSnapshot.type === 'rect') {
+        const { origin, size } = movingSnapshot;
+        const newW = Math.max(0.001, size.w + du);
+        const newH = Math.max(0.001, size.h + dv);
+        updated = { ...movingSnapshot, size: { w: newW, h: newH } };
+      } else if (activeHandle === 'circle' && movingSnapshot.type === 'circle') {
+        const radius = Math.max(0.001, movingSnapshot.radius + du); // assume drag mainly horizontal
+        updated = { ...movingSnapshot, radius };
+      } else if (activeHandle === 'line-start' && movingSnapshot.type === 'line') {
+        updated = { ...movingSnapshot, a: { u: movingSnapshot.a.u + du, v: movingSnapshot.a.v + dv } };
+      } else if (activeHandle === 'line-end' && movingSnapshot.type === 'line') {
+        updated = { ...movingSnapshot, b: { u: movingSnapshot.b.u + du, v: movingSnapshot.b.v + dv } };
+      }
+
       onTransformShape(movingId, updated);
       return;
     }
@@ -166,6 +249,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
     const uv = svgPointToUV(event, svgRef.current);
 
     if (movingId) {
+      setActiveHandle('move');
       resetMove();
       return;
     }
@@ -228,6 +312,35 @@ export const UVEditor: React.FC<UVEditorProps> = ({
             </button>
           ))}
         </div>
+        <div className="color-controls">
+          {selectedShape ? (
+            <>
+              <span>Selected: {selectedShape.type}</span>
+              <label>
+                Stroke
+                <input
+                  type="color"
+                  value={strokeInput}
+                  onChange={(e) => onStrokeChange(e.target.value)}
+                />
+              </label>
+              <label>
+                Fill
+                <input
+                  type="color"
+                  value={fillInput}
+                  disabled={selectedShape.type === 'line'}
+                  onChange={(e) => onFillChange(e.target.value)}
+                />
+              </label>
+              <button type="button" className="secondary-button" onClick={onDeleteSelected}>
+                Delete
+              </button>
+            </>
+          ) : (
+            <span>No selection</span>
+          )}
+        </div>
       </div>
       <div className="panel-body">
         <svg
@@ -238,7 +351,23 @@ export const UVEditor: React.FC<UVEditorProps> = ({
           onPointerUp={handlePointerUp}
           onPointerLeave={resetDrag}
         >
-          <rect x={0} y={0} width={1} height={1} fill="#ffffff" stroke="#cccccc" strokeWidth={0.002} />
+          <rect
+            x={0}
+            y={0}
+            width={1}
+            height={1}
+            fill="#ffffff"
+            stroke="#cccccc"
+            strokeWidth={0.002}
+          />
+
+          {showGradient && (
+            <g opacity={0.35}>
+              {gradientCells.map((cell, idx) => (
+                <rect key={`grad-${idx}`} x={cell.u} y={cell.v} width={cell.w} height={cell.h} fill={cell.color} stroke="none" />
+              ))}
+            </g>
+          )}
 
           {showGuides &&
             Array.from({ length: 9 }).map((_, idx) => {
@@ -251,32 +380,42 @@ export const UVEditor: React.FC<UVEditorProps> = ({
               );
             })}
 
+          {showDots &&
+            Array.from({ length: 9 }).map((_, row) =>
+              Array.from({ length: 9 }).map((_, col) => {
+                const u = col / 8;
+                const v = row / 8;
+                const color = cornerColor(u, v);
+                return <circle key={`dot-${row}-${col}`} cx={u} cy={v} r={0.0025} fill={color} />;
+              }),
+            )}
+
           {scene.shapes.map((shape) => {
             if (shape.type === 'line') {
               return (
-                <g key={shape.id}>
-                  <line
-                    x1={shape.a.u}
-                    y1={shape.a.v}
-                    x2={shape.b.u}
-                    y2={shape.b.v}
-                    stroke={shape.stroke}
-                    strokeWidth={shape.strokeWidth}
-                    strokeLinecap="round"
-                    className={selectedId === shape.id ? 'selected-shape' : ''}
-                  />
-                  <line
-                    x1={shape.a.u}
-                    y1={shape.a.v}
-                    x2={shape.b.u}
-                    y2={shape.b.v}
-                    stroke="transparent"
-                    strokeWidth={0.02}
-                    strokeLinecap="round"
-                    pointerEvents="stroke"
-                    onPointerDown={(e) => {
-                      if (activeTool !== 'select') return;
-                      e.stopPropagation();
+              <g key={shape.id}>
+                <line
+                  x1={shape.a.u}
+                  y1={shape.a.v}
+                  x2={shape.b.u}
+                  y2={shape.b.v}
+                  stroke={shape.stroke}
+                  strokeWidth={shape.strokeWidth}
+                  strokeLinecap="round"
+                  className={selectedId === shape.id ? 'selected-shape' : ''}
+                />
+                <line
+                  x1={shape.a.u}
+                  y1={shape.a.v}
+                  x2={shape.b.u}
+                  y2={shape.b.v}
+                  stroke="transparent"
+                  strokeWidth={0.02}
+                  strokeLinecap="round"
+                  pointerEvents="stroke"
+                  onPointerDown={(e) => {
+                    if (activeTool !== 'select') return;
+                    e.stopPropagation();
                     onSelectShape(shape.id);
                     onStartShapeTransform();
                     setMovingId(shape.id);
@@ -378,6 +517,89 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                 svgRef.current?.setPointerCapture(e.pointerId);
               }}
             />
+          )}
+
+          {selectedShape && activeTool === 'select' && (
+            <g className="handles">
+              {selectedShape.type === 'rect' &&
+                rectHandles(selectedShape).map((pt, idx) => (
+                  <circle
+                    key={`rect-h-${idx}`}
+                    cx={pt.u}
+                    cy={pt.v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('rect');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                ))}
+              {selectedShape.type === 'circle' && (
+                <circle
+                  cx={circleHandle(selectedShape).u}
+                  cy={circleHandle(selectedShape).v}
+                  r={0.008}
+                  fill="#ffffff"
+                  stroke="#2d68ff"
+                  strokeWidth={0.0015}
+                  onPointerDown={(e) => {
+                    e.stopPropagation();
+                    onStartShapeTransform();
+                    setMovingId(selectedShape.id);
+                    setMovingStart(svgPointToUV(e, svgRef.current!));
+                    setMovingSnapshot(selectedShape);
+                    setActiveHandle('circle');
+                    svgRef.current?.setPointerCapture(e.pointerId);
+                  }}
+                />
+              )}
+              {selectedShape.type === 'line' && (
+                <>
+                  <circle
+                    cx={lineHandles(selectedShape).start.u}
+                    cy={lineHandles(selectedShape).start.v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('line-start');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                  <circle
+                    cx={lineHandles(selectedShape).end.u}
+                    cy={lineHandles(selectedShape).end.v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('line-end');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </>
+              )}
+            </g>
           )}
 
           {previewShape && previewShape.type === 'line' && (
