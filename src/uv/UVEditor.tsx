@@ -1,11 +1,14 @@
 import React, { useMemo, useRef, useState } from 'react';
-import { Scene, Shape, createId, normalizeRect, Vec2 } from '../model/scene';
+import { Scene, Shape, Vec2, createId, normalizeRect } from '../model/scene';
 
-type Tool = 'select' | 'line' | 'rect';
+type Tool = 'select' | 'line' | 'rect' | 'circle';
 
 interface UVEditorProps {
   scene: Scene;
   onAddShape: (shape: Shape) => void;
+  selectedId: string | null;
+  onSelectShape: (id: string | null) => void;
+  showGuides: boolean;
 }
 
 function clamp01(value: number): number {
@@ -19,7 +22,13 @@ function svgPointToUV(event: React.PointerEvent<SVGSVGElement>, svg: SVGSVGEleme
   return { u, v };
 }
 
-export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
+function distance(a: Vec2, b: Vec2): number {
+  const du = a.u - b.u;
+  const dv = a.v - b.v;
+  return Math.hypot(du, dv);
+}
+
+export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape, selectedId, onSelectShape, showGuides }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [activeTool, setActiveTool] = useState<Tool>('line');
   const [dragStart, setDragStart] = useState<Vec2 | null>(null);
@@ -33,11 +42,17 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
     if (activeTool === 'rect') {
       return { type: 'rect', a: dragStart, b: dragCurrent } as const;
     }
+    if (activeTool === 'circle') {
+      return { type: 'circle', center: dragStart, radius: distance(dragStart, dragCurrent) } as const;
+    }
     return null;
   }, [activeTool, dragCurrent, dragStart]);
 
   const handlePointerDown = (event: React.PointerEvent<SVGSVGElement>) => {
-    if (activeTool === 'select') return;
+    if (activeTool === 'select') {
+      onSelectShape(null);
+      return;
+    }
     if (!svgRef.current) return;
     const uv = svgPointToUV(event, svgRef.current);
     setDragStart(uv);
@@ -84,6 +99,18 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
         fill: '#e5e5e5',
       };
       onAddShape(shape);
+    } else if (activeTool === 'circle') {
+      const radius = distance(dragStart, uv);
+      const shape: Shape = {
+        id: createId('circle'),
+        type: 'circle',
+        center: dragStart,
+        radius,
+        stroke: '#000000',
+        strokeWidth: 0.002,
+        fill: '#e5e5e5',
+      };
+      onAddShape(shape);
     }
 
     resetDrag();
@@ -94,7 +121,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
       <div className="panel-header">
         <span>UV Editor</span>
         <div className="tool-buttons">
-          {(['select', 'line', 'rect'] as Tool[]).map((tool) => (
+          {(['select', 'line', 'rect', 'circle'] as Tool[]).map((tool) => (
             <button
               key={tool}
               type="button"
@@ -117,6 +144,17 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
         >
           <rect x={0} y={0} width={1} height={1} fill="#ffffff" stroke="#cccccc" strokeWidth={0.002} />
 
+          {showGuides &&
+            Array.from({ length: 9 }).map((_, idx) => {
+              const t = idx / 8;
+              return (
+                <g key={idx} stroke="#eaeaea" strokeWidth={0.0007}>
+                  <line x1={t} y1={0} x2={t} y2={1} />
+                  <line x1={0} y1={t} x2={1} y2={t} />
+                </g>
+              );
+            })}
+
           {scene.shapes.map((shape) => {
             if (shape.type === 'line') {
               return (
@@ -129,19 +167,50 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
                   stroke={shape.stroke}
                   strokeWidth={shape.strokeWidth}
                   strokeLinecap="round"
+                  className={selectedId === shape.id ? 'selected-shape' : ''}
+                  onPointerDown={(e) => {
+                    if (activeTool !== 'select') return;
+                    e.stopPropagation();
+                    onSelectShape(shape.id);
+                  }}
+                />
+              );
+            }
+            if (shape.type === 'rect') {
+              return (
+                <rect
+                  key={shape.id}
+                  x={shape.origin.u}
+                  y={shape.origin.v}
+                  width={shape.size.w}
+                  height={shape.size.h}
+                  stroke={shape.stroke}
+                  strokeWidth={shape.strokeWidth}
+                  fill={shape.fill ?? 'none'}
+                  className={selectedId === shape.id ? 'selected-shape' : ''}
+                  onPointerDown={(e) => {
+                    if (activeTool !== 'select') return;
+                    e.stopPropagation();
+                    onSelectShape(shape.id);
+                  }}
                 />
               );
             }
             return (
-              <rect
+              <circle
                 key={shape.id}
-                x={shape.origin.u}
-                y={shape.origin.v}
-                width={shape.size.w}
-                height={shape.size.h}
+                cx={shape.center.u}
+                cy={shape.center.v}
+                r={shape.radius}
                 stroke={shape.stroke}
                 strokeWidth={shape.strokeWidth}
                 fill={shape.fill ?? 'none'}
+                className={selectedId === shape.id ? 'selected-shape' : ''}
+                onPointerDown={(e) => {
+                  if (activeTool !== 'select') return;
+                  e.stopPropagation();
+                  onSelectShape(shape.id);
+                }}
               />
             );
           })}
@@ -164,6 +233,18 @@ export const UVEditor: React.FC<UVEditorProps> = ({ scene, onAddShape }) => {
               y={Math.min(previewShape.a.v, previewShape.b.v)}
               width={Math.abs(previewShape.b.u - previewShape.a.u)}
               height={Math.abs(previewShape.b.v - previewShape.a.v)}
+              stroke="#2d68ff"
+              strokeWidth={0.002}
+              fill="rgba(45, 104, 255, 0.1)"
+              strokeDasharray="0.01 0.01"
+            />
+          )}
+
+          {previewShape && previewShape.type === 'circle' && (
+            <circle
+              cx={previewShape.center.u}
+              cy={previewShape.center.v}
+              r={previewShape.radius}
               stroke="#2d68ff"
               strokeWidth={0.002}
               fill="rgba(45, 104, 255, 0.1)"

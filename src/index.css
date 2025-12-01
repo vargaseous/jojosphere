@@ -45,6 +45,33 @@ body {
   width: 140px;
 }
 
+.checkbox {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.9rem;
+}
+
+.color-controls {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.9rem;
+  padding: 0.35rem 0.5rem;
+  background: #f4f7ff;
+  border: 1px solid #dfe6ff;
+  border-radius: 6px;
+}
+
+.color-controls input[type="color"] {
+  width: 36px;
+  height: 28px;
+  padding: 0;
+  border: none;
+  background: transparent;
+  cursor: pointer;
+}
+
 .main {
   display: flex;
   flex: 1;
@@ -104,6 +131,10 @@ body {
   background: #2d68ff;
   color: white;
   border-color: #2d68ff;
+}
+
+.selected-shape {
+  filter: drop-shadow(0 0 0.003px #2d68ff);
 }
 
 .export-button {

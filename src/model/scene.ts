@@ -19,7 +19,17 @@ export interface RectShape {
   fill: string | null;
 }
 
-export type Shape = LineShape | RectShape;
+export interface CircleShape {
+  id: string;
+  type: 'circle';
+  center: Vec2;
+  radius: number;
+  stroke: string;
+  strokeWidth: number;
+  fill: string | null;
+}
+
+export type Shape = LineShape | RectShape | CircleShape;
 
 export interface Scene {
   shapes: Shape[];

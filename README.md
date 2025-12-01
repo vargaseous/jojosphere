@@ -20,10 +20,12 @@ yarn preview
 
 ## Usage
 
-- Use the UV Editor (left) to draw lines or rectangles inside the unit square.
+- Use the UV Editor (left) to draw **lines**, **rectangles**, or **circles** in UV space.
+- Switch to **Select** to pick a shape and adjust stroke/fill colours from the header controls (fill is disabled for lines).
+- Toggle **Show UV guides** to overlay a UV grid on both the editor and the sphere preview for orientation.
 - Adjust rotation sliders (header) to rotate the sphere view (X/Y/Z in degrees).
 - The Sphere Preview (right) shows the tessellated projection on the front hemisphere using an orthographic camera.
-- Click **Export sphere SVG** to download a standalone `sphere-export.svg` with the current view.
+- Click **Export sphere SVG** to download a standalone `sphere-export.svg` with the current view (guides included when enabled).
 
 ## Notes
 

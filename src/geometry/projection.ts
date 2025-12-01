@@ -1,4 +1,4 @@
-import { LineShape, RectShape, Shape, Vec2 } from '../model/scene';
+import { CircleShape, LineShape, RectShape, Shape, Vec2 } from '../model/scene';
 
 export interface Rotation {
   rx: number;
@@ -68,7 +68,12 @@ export function uvPointToXY(point: Vec2, rotation: Rotation): Vec2XY | null {
   return projectOrthographic(rotated);
 }
 
-function sampleLine(shape: LineShape, samples: number): Vec2[] {
+interface TessellatedShape {
+  points: Vec2[];
+  closed: boolean;
+}
+
+function sampleLine(shape: LineShape, samples: number): TessellatedShape {
   const pts: Vec2[] = [];
   for (let i = 0; i <= samples; i += 1) {
     const t = i / samples;
@@ -77,10 +82,10 @@ function sampleLine(shape: LineShape, samples: number): Vec2[] {
       v: shape.a.v + t * (shape.b.v - shape.a.v),
     });
   }
-  return pts;
+  return { points: pts, closed: false };
 }
 
-function sampleRect(shape: RectShape, samples: number): Vec2[] {
+function sampleRect(shape: RectShape, samples: number): TessellatedShape {
   const { origin, size } = shape;
   const perEdge = Math.max(2, Math.floor(samples / 4));
   const corners: Vec2[] = [
@@ -102,18 +107,34 @@ function sampleRect(shape: RectShape, samples: number): Vec2[] {
     }
   }
 
-  return points;
+  return { points, closed: true };
 }
 
-export function tessellateShape(shape: Shape, samples = 32): Vec2[] {
+function sampleCircle(shape: CircleShape, samples: number): TessellatedShape {
+  const pts: Vec2[] = [];
+  const steps = Math.max(12, samples);
+  for (let i = 0; i <= steps; i += 1) {
+    const t = (i / steps) * Math.PI * 2;
+    pts.push({
+      u: shape.center.u + shape.radius * Math.cos(t),
+      v: shape.center.v + shape.radius * Math.sin(t),
+    });
+  }
+  return { points: pts, closed: true };
+}
+
+export function tessellateShape(shape: Shape, samples = 32): TessellatedShape {
   if (shape.type === 'line') {
     return sampleLine(shape, samples);
   }
-  return sampleRect(shape, samples);
+  if (shape.type === 'rect') {
+    return sampleRect(shape, samples);
+  }
+  return sampleCircle(shape, samples);
 }
 
-export function projectShapeToXY(shape: Shape, rotation: Rotation, samples = 32): Vec2XY[] {
-  const uvPoints = tessellateShape(shape, samples);
+export function projectShapeToXY(shape: Shape, rotation: Rotation, samples = 32): { points: Vec2XY[]; closed: boolean } {
+  const { points: uvPoints, closed } = tessellateShape(shape, samples);
   const projected: Vec2XY[] = [];
   for (const uv of uvPoints) {
     const xy = uvPointToXY(uv, rotation);
@@ -121,5 +142,5 @@ export function projectShapeToXY(shape: Shape, rotation: Rotation, samples = 32)
       projected.push(xy);
     }
   }
-  return projected;
+  return { points: projected, closed };
 }
