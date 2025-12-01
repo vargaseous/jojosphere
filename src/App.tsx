@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { UVEditor } from './uv/UVEditor';
 import { SpherePreview } from './sphere/SpherePreview';
 import { initialScene, Scene, Shape } from './model/scene';
@@ -16,6 +16,13 @@ const App: React.FC = () => {
   const [strokeInput, setStrokeInput] = useState('#000000');
   const [fillInput, setFillInput] = useState('#e5e5e5');
   const [showGuides, setShowGuides] = useState(true);
+  const [history, setHistory] = useState<Scene[]>([]);
+  const [future, setFuture] = useState<Scene[]>([]);
+  const sceneRef = useRef(scene);
+
+  useEffect(() => {
+    sceneRef.current = scene;
+  }, [scene]);
 
   const rotation = useMemo<Rotation>(
     () => ({
@@ -36,13 +43,35 @@ const App: React.FC = () => {
     }
   }, [selectedShape]);
 
+  const pushHistory = () => {
+    setHistory((h) => [...h, sceneRef.current]);
+    setFuture([]);
+  };
+
   const handleAddShape = (shape: Shape) => {
+    pushHistory();
     setScene((prev) => ({ shapes: [...prev.shapes, shape] }));
     setSelectedId(shape.id);
     setStrokeInput(shape.stroke);
     if (shape.type !== 'line') {
       setFillInput(shape.fill ?? '#e5e5e5');
     }
+  };
+
+  const handleUpdateShape = (id: string, updater: (shape: Shape) => Shape, recordHistory = true) => {
+    if (recordHistory) pushHistory();
+    setScene((prev) => ({
+      shapes: prev.shapes.map((s) => (s.id === id ? updater(s) : s)),
+    }));
+  };
+
+  const handleUndo = () => {
+    if (!history.length) return;
+    const prev = history[history.length - 1];
+    setHistory((h) => h.slice(0, -1));
+    setFuture((f) => [sceneRef.current, ...f]);
+    setScene(prev);
+    setSelectedId((id) => (prev.shapes.some((s) => s.id === id) ? id : null));
   };
 
   const handleExport = () => {
@@ -93,9 +122,15 @@ const App: React.FC = () => {
                   onChange={(e) => {
                     const value = e.target.value;
                     setStrokeInput(value);
-                    setScene((prev) => ({
-                      shapes: prev.shapes.map((s) => (s.id === selectedId ? { ...s, stroke: value } : s)),
-                    }));
+                    if (!selectedId) return;
+                    handleUpdateShape(
+                      selectedId,
+                      (s) => ({
+                        ...s,
+                        stroke: value,
+                      }),
+                      true,
+                    );
                   }}
                 />
               </label>
@@ -108,13 +143,15 @@ const App: React.FC = () => {
                   onChange={(e) => {
                     const value = e.target.value;
                     setFillInput(value);
-                    setScene((prev) => ({
-                      shapes: prev.shapes.map((s) => {
-                        if (s.id !== selectedId) return s;
+                    if (!selectedId) return;
+                    handleUpdateShape(
+                      selectedId,
+                      (s) => {
                         if (s.type === 'line') return s;
                         return { ...s, fill: value };
-                      }),
-                    }));
+                      },
+                      true,
+                    );
                   }}
                 />
               </label>
@@ -123,6 +160,9 @@ const App: React.FC = () => {
             <span>No selection</span>
           )}
         </div>
+        <button type="button" className="secondary-button" onClick={handleUndo} disabled={!history.length}>
+          Undo
+        </button>
 
         <button type="button" className="export-button" onClick={handleExport}>
           Export sphere SVG
@@ -130,7 +170,15 @@ const App: React.FC = () => {
       </header>
 
       <main className="main">
-        <UVEditor scene={scene} onAddShape={handleAddShape} selectedId={selectedId} onSelectShape={setSelectedId} showGuides={showGuides} />
+        <UVEditor
+          scene={scene}
+          onAddShape={handleAddShape}
+          selectedId={selectedId}
+          onSelectShape={setSelectedId}
+          onStartShapeTransform={pushHistory}
+          onTransformShape={(id, shape) => handleUpdateShape(id, () => shape, false)}
+          showGuides={showGuides}
+        />
         <SpherePreview scene={scene} rotation={rotation} showGuides={showGuides} />
       </main>
     </div>

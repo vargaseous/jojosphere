@@ -72,7 +72,8 @@ export const SpherePreview: React.FC<SpherePreviewProps> = ({ scene, rotation, s
 
           <g>
             {scene.shapes.map((shape) => {
-              const { points, closed } = projectShapeToXY(shape, rotation, 64);
+              const sampleDensity = shape.type === 'circle' ? 128 : 96;
+              const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity);
               if (points.length < 2) return null;
               const stroke = shape.stroke;
               const strokeWidth = shape.strokeWidth * 2; // Slightly thicker for visibility on sphere

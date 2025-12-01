@@ -112,7 +112,7 @@ function sampleRect(shape: RectShape, samples: number): TessellatedShape {
 
 function sampleCircle(shape: CircleShape, samples: number): TessellatedShape {
   const pts: Vec2[] = [];
-  const steps = Math.max(12, samples);
+  const steps = Math.max(64, samples * 2);
   for (let i = 0; i <= steps; i += 1) {
     const t = (i / steps) * Math.PI * 2;
     pts.push({
@@ -133,14 +133,150 @@ export function tessellateShape(shape: Shape, samples = 32): TessellatedShape {
   return sampleCircle(shape, samples);
 }
 
-export function projectShapeToXY(shape: Shape, rotation: Rotation, samples = 32): { points: Vec2XY[]; closed: boolean } {
-  const { points: uvPoints, closed } = tessellateShape(shape, samples);
-  const projected: Vec2XY[] = [];
-  for (const uv of uvPoints) {
-    const xy = uvPointToXY(uv, rotation);
-    if (xy) {
-      projected.push(xy);
+function interpolateAtZ0(p0: Vec3, p1: Vec3): Vec3 {
+  const t = p0.z / (p0.z - p1.z);
+  return {
+    x: p0.x + t * (p1.x - p0.x),
+    y: p0.y + t * (p1.y - p0.y),
+    z: 0,
+  };
+}
+
+function clipPolylineToFrontHemisphere(points: Vec3[], closed: boolean): Vec3[] {
+  if (points.length === 0) return [];
+  const output: Vec3[] = [];
+  const count = closed ? points.length : points.length - 1;
+
+  for (let i = 0; i < count; i += 1) {
+    const current = points[i];
+    const next = points[(i + 1) % points.length];
+    const currentFront = current.z >= 0;
+    const nextFront = next.z >= 0;
+
+    if (currentFront) {
+      output.push(current);
+    }
+
+    if (currentFront !== nextFront) {
+      const intersect = interpolateAtZ0(current, next);
+      output.push(intersect);
     }
   }
+
+  return output;
+}
+
+function clipPolygonToFrontHemisphere(points: Vec3[]): Vec3[] {
+  // Sutherland–Hodgman against plane z >= 0
+  if (points.length === 0) return [];
+  let output = points;
+
+  const inside = (p: Vec3) => p.z >= 0;
+
+  const clipped: Vec3[] = [];
+  for (let i = 0; i < output.length; i += 1) {
+    const current = output[i];
+    const prev = output[(i - 1 + output.length) % output.length];
+    const currentInside = inside(current);
+    const prevInside = inside(prev);
+
+    if (currentInside) {
+      if (!prevInside) {
+        clipped.push(interpolateAtZ0(prev, current));
+      }
+      clipped.push(current);
+    } else if (prevInside) {
+      clipped.push(interpolateAtZ0(prev, current));
+    }
+  }
+
+  output = clipped;
+  return output;
+}
+
+function approximateUnitCircle(segments = 360): Vec2XY[] {
+  const pts: Vec2XY[] = [];
+  for (let i = 0; i < segments; i += 1) {
+    const t = (i / segments) * Math.PI * 2;
+    pts.push({ x: Math.cos(t), y: Math.sin(t) });
+  }
+  return pts;
+}
+
+function clipPolygon2D(subject: Vec2XY[], clipper: Vec2XY[]): Vec2XY[] {
+  if (subject.length === 0) return [];
+  let output = subject;
+
+  const clipCount = clipper.length;
+  for (let i = 0; i < clipCount; i += 1) {
+    const c1 = clipper[i];
+    const c2 = clipper[(i + 1) % clipCount];
+
+    const input = output;
+    output = [];
+    if (input.length === 0) break;
+
+    const inside = (p: Vec2XY) => {
+      // left side of edge (c1 -> c2)
+      return (c2.x - c1.x) * (p.y - c1.y) - (c2.y - c1.y) * (p.x - c1.x) >= 0;
+    };
+
+    const intersection = (p1: Vec2XY, p2: Vec2XY): Vec2XY => {
+      const A1 = c2.y - c1.y;
+      const B1 = c1.x - c2.x;
+      const C1 = A1 * c1.x + B1 * c1.y;
+
+      const A2 = p2.y - p1.y;
+      const B2 = p1.x - p2.x;
+      const C2 = A2 * p1.x + B2 * p1.y;
+
+      const det = A1 * B2 - A2 * B1;
+      if (Math.abs(det) < 1e-8) return p1; // parallel, should not happen often
+      return {
+        x: (B2 * C1 - B1 * C2) / det,
+        y: (A1 * C2 - A2 * C1) / det,
+      };
+    };
+
+    for (let j = 0; j < input.length; j += 1) {
+      const current = input[j];
+      const prev = input[(j - 1 + input.length) % input.length];
+      const currentInside = inside(current);
+      const prevInside = inside(prev);
+
+      if (currentInside) {
+        if (!prevInside) {
+          output.push(intersection(prev, current));
+        }
+        output.push(current);
+      } else if (prevInside) {
+        output.push(intersection(prev, current));
+      }
+    }
+  }
+
+  return output;
+}
+
+export function projectShapeToXY(
+  shape: Shape,
+  rotation: Rotation,
+  samples = 32,
+): { points: Vec2XY[]; closed: boolean } {
+  const { points: uvPoints, closed } = tessellateShape(shape, samples);
+  const rotated: Vec3[] = uvPoints.map((uv) => applyRotation(uvToSphere(uv.u, uv.v), rotation));
+  const clipped3D = closed ? clipPolygonToFrontHemisphere(rotated) : clipPolylineToFrontHemisphere(rotated, closed);
+
+  let projected: Vec2XY[] = [];
+  for (const p of clipped3D) {
+    const xy = projectOrthographic(p);
+    if (xy) projected.push(xy);
+  }
+
+  if (closed && shape.type !== 'line') {
+    const circle = approximateUnitCircle(96);
+    projected = clipPolygon2D(projected, circle);
+  }
+
   return { points: projected, closed };
 }

@@ -60,7 +60,8 @@ export function exportSphereSvg(scene: Scene, rotation: Rotation, options: Expor
 
   const shapesMarkup = scene.shapes
     .map((shape) => {
-      const { points, closed } = projectShapeToXY(shape, rotation, 64);
+      const sampleDensity = shape.type === 'circle' ? 160 : 120;
+      const { points, closed } = projectShapeToXY(shape, rotation, sampleDensity);
       if (points.length < 2) return null;
       if (closed && shape.type !== 'line') {
         const closedPts = ensureClosed(points);
