@@ -1,4 +1,4 @@
-import { CircleShape, LineShape, RectShape, Scene, Shape } from '../model/scene';
+import { CircleShape, LatitudeShape, LineShape, LongitudeShape, RectShape, Scene, Shape } from '../model/scene';
 
 function shapeToSvg(shape: Shape): string {
   if (shape.type === 'line') {
@@ -9,6 +9,14 @@ function shapeToSvg(shape: Shape): string {
     const s = shape as RectShape;
     const fill = s.fill ?? 'none';
     return `<rect x="${s.origin.u}" y="${s.origin.v}" width="${s.size.w}" height="${s.size.h}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" fill="${fill}" />`;
+  }
+  if (shape.type === 'latitude') {
+    const s = shape as LatitudeShape;
+    return `<line data-latitude="true" x1="0" y1="${s.v}" x2="1" y2="${s.v}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" />`;
+  }
+  if (shape.type === 'longitude') {
+    const s = shape as LongitudeShape;
+    return `<line data-longitude="true" x1="${s.u}" y1="0" x2="${s.u}" y2="1" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" />`;
   }
   const s = shape as CircleShape;
   const fill = s.fill ?? 'none';
@@ -63,6 +71,26 @@ export function uvSvgToShapes(svgString: string, requireMarker = false): Shape[]
 
   const lines = Array.from(doc.querySelectorAll('line'));
   lines.forEach((el, idx) => {
+    if (el.hasAttribute('data-latitude')) {
+      shapes.push({
+        id: `latitude-import-${idx}`,
+        type: 'latitude',
+        v: attrNum(el, 'y1', 0.5),
+        stroke: el.getAttribute('stroke') || '#000000',
+        strokeWidth: attrNum(el, 'stroke-width', 0.002),
+      });
+      return;
+    }
+    if (el.hasAttribute('data-longitude')) {
+      shapes.push({
+        id: `longitude-import-${idx}`,
+        type: 'longitude',
+        u: attrNum(el, 'x1', 0.5),
+        stroke: el.getAttribute('stroke') || '#000000',
+        strokeWidth: attrNum(el, 'stroke-width', 0.002),
+      });
+      return;
+    }
     shapes.push({
       id: `line-import-${idx}`,
       type: 'line',

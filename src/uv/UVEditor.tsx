@@ -1,7 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Scene, Shape, Vec2, createId, normalizeRect } from '../model/scene';
 
-type Tool = 'select' | 'line' | 'rect' | 'circle';
+type Tool = 'select' | 'line' | 'rect' | 'circle' | 'latitude' | 'longitude';
 
 interface UVEditorProps {
   scene: Scene;
@@ -19,9 +19,10 @@ interface UVEditorProps {
   onStrokeChange: (value: string) => void;
   onFillChange: (value: string) => void;
   onDeleteSelected: () => void;
+  onDuplicateSelected: () => void;
 }
 
-type HandleKind = 'move' | 'rect' | 'circle' | 'line-start' | 'line-end';
+type HandleKind = 'move' | 'rect' | 'circle' | 'line-start' | 'line-end' | 'latitude' | 'longitude';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -60,6 +61,12 @@ function shapeBounds(shape: Shape): { minU: number; maxU: number; minV: number; 
       maxV: shape.origin.v + shape.size.h,
     };
   }
+  if (shape.type === 'latitude') {
+    return { minU: 0, maxU: 1, minV: shape.v, maxV: shape.v };
+  }
+  if (shape.type === 'longitude') {
+    return { minU: shape.u, maxU: shape.u, minV: 0, maxV: 1 };
+  }
   return {
     minU: shape.center.u - shape.radius,
     maxU: shape.center.u + shape.radius,
@@ -86,6 +93,66 @@ function lineHandles(shape: Extract<Shape, { type: 'line' }>): { start: Vec2; en
   return { start: shape.a, end: shape.b };
 }
 
+function lineLength(shape: Extract<Shape, { type: 'line' }>): number {
+  return distance(shape.a, shape.b);
+}
+
+function setLineLength(shape: Extract<Shape, { type: 'line' }>, newLength: number): Extract<Shape, { type: 'line' }> {
+  const len = lineLength(shape);
+  if (len < 1e-6) return shape;
+  const half = newLength / 2;
+  const dirU = (shape.b.u - shape.a.u) / len;
+  const dirV = (shape.b.v - shape.a.v) / len;
+  const midU = (shape.a.u + shape.b.u) / 2;
+  const midV = (shape.a.v + shape.b.v) / 2;
+  return {
+    ...shape,
+    a: { u: midU - dirU * half, v: midV - dirV * half },
+    b: { u: midU + dirU * half, v: midV + dirV * half },
+  };
+}
+
+function shapePosition(shape: Shape): Vec2 {
+  if (shape.type === 'line') {
+    return { u: (shape.a.u + shape.b.u) / 2, v: (shape.a.v + shape.b.v) / 2 };
+  }
+  if (shape.type === 'rect') {
+    return { u: shape.origin.u, v: shape.origin.v };
+  }
+  if (shape.type === 'circle') {
+    return shape.center;
+  }
+  if (shape.type === 'latitude') {
+    return { u: 0, v: shape.v };
+  }
+  if (shape.type === 'longitude') {
+    return { u: shape.u, v: 0 };
+  }
+  return { u: 0, v: 0 };
+}
+
+function setShapePosition(shape: Shape, u: number, v: number): Shape {
+  if (shape.type === 'line') {
+    const pos = shapePosition(shape);
+    const du = u - pos.u;
+    const dv = v - pos.v;
+    return moveShape(shape, du, dv);
+  }
+  if (shape.type === 'rect') {
+    return { ...shape, origin: { u, v } };
+  }
+  if (shape.type === 'circle') {
+    return { ...shape, center: { u, v } };
+  }
+  if (shape.type === 'latitude') {
+    return { ...shape, v: clamp01(v) };
+  }
+  if (shape.type === 'longitude') {
+    return { ...shape, u: clamp01(u) };
+  }
+  return shape;
+}
+
 function moveShape(shape: Shape, du: number, dv: number): Shape {
   if (shape.type === 'line') {
     return {
@@ -98,6 +165,18 @@ function moveShape(shape: Shape, du: number, dv: number): Shape {
     return {
       ...shape,
       origin: { u: shape.origin.u + du, v: shape.origin.v + dv },
+    };
+  }
+  if (shape.type === 'latitude') {
+    return {
+      ...shape,
+      v: clamp01(shape.v + dv),
+    };
+  }
+  if (shape.type === 'longitude') {
+    return {
+      ...shape,
+      u: clamp01(shape.u + du),
     };
   }
   return {
@@ -134,6 +213,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
   onStrokeChange,
   onFillChange,
   onDeleteSelected,
+  onDuplicateSelected,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
   const [activeTool, setActiveTool] = useState<Tool>('line');
@@ -184,6 +264,12 @@ export const UVEditor: React.FC<UVEditorProps> = ({
     if (activeTool === 'circle') {
       return { type: 'circle', center: dragStart, radius: distance(dragStart, dragCurrent) } as const;
     }
+    if (activeTool === 'latitude') {
+      return { type: 'latitude', v: dragCurrent.v } as const;
+    }
+    if (activeTool === 'longitude') {
+      return { type: 'longitude', u: dragCurrent.u } as const;
+    }
     return null;
   }, [activeTool, dragCurrent, dragStart]);
 
@@ -223,6 +309,10 @@ export const UVEditor: React.FC<UVEditorProps> = ({
         updated = { ...movingSnapshot, a: { u: movingSnapshot.a.u + du, v: movingSnapshot.a.v + dv } };
       } else if (activeHandle === 'line-end' && movingSnapshot.type === 'line') {
         updated = { ...movingSnapshot, b: { u: movingSnapshot.b.u + du, v: movingSnapshot.b.v + dv } };
+      } else if (activeHandle === 'latitude' && movingSnapshot.type === 'latitude') {
+        updated = { ...movingSnapshot, v: clamp01(movingSnapshot.v + dv) };
+      } else if (activeHandle === 'longitude' && movingSnapshot.type === 'longitude') {
+        updated = { ...movingSnapshot, u: clamp01(movingSnapshot.u + du) };
       }
 
       onTransformShape(movingId, updated);
@@ -291,6 +381,24 @@ export const UVEditor: React.FC<UVEditorProps> = ({
         fill: '#e5e5e5',
       };
       onAddShape(shape);
+    } else if (activeTool === 'latitude') {
+      const shape: Shape = {
+        id: createId('latitude'),
+        type: 'latitude',
+        v: uv.v,
+        stroke: '#000000',
+        strokeWidth: 0.002,
+      };
+      onAddShape(shape);
+    } else if (activeTool === 'longitude') {
+      const shape: Shape = {
+        id: createId('longitude'),
+        type: 'longitude',
+        u: uv.u,
+        stroke: '#000000',
+        strokeWidth: 0.002,
+      };
+      onAddShape(shape);
     }
 
     resetDrag();
@@ -301,7 +409,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
       <div className="panel-header">
         <span>UV Editor</span>
         <div className="tool-buttons">
-          {(['select', 'line', 'rect', 'circle'] as Tool[]).map((tool) => (
+          {(['select', 'line', 'rect', 'circle', 'latitude', 'longitude'] as Tool[]).map((tool) => (
             <button
               key={tool}
               type="button"
@@ -311,35 +419,6 @@ export const UVEditor: React.FC<UVEditorProps> = ({
               {tool.toUpperCase()}
             </button>
           ))}
-        </div>
-        <div className="color-controls">
-          {selectedShape ? (
-            <>
-              <span>Selected: {selectedShape.type}</span>
-              <label>
-                Stroke
-                <input
-                  type="color"
-                  value={strokeInput}
-                  onChange={(e) => onStrokeChange(e.target.value)}
-                />
-              </label>
-              <label>
-                Fill
-                <input
-                  type="color"
-                  value={fillInput}
-                  disabled={selectedShape.type === 'line'}
-                  onChange={(e) => onFillChange(e.target.value)}
-                />
-              </label>
-              <button type="button" className="secondary-button" onClick={onDeleteSelected}>
-                Delete
-              </button>
-            </>
-          ) : (
-            <span>No selection</span>
-          )}
         </div>
       </div>
       <div className="panel-body">
@@ -427,6 +506,80 @@ export const UVEditor: React.FC<UVEditorProps> = ({
               </g>
             );
           }
+            if (shape.type === 'latitude') {
+              return (
+                <g key={shape.id}>
+                  <line
+                    x1={0}
+                    y1={shape.v}
+                    x2={1}
+                    y2={shape.v}
+                    stroke={shape.stroke}
+                    strokeWidth={shape.strokeWidth}
+                    strokeLinecap="round"
+                    className={selectedId === shape.id ? 'selected-shape' : ''}
+                  />
+                  <line
+                    x1={0}
+                    y1={shape.v}
+                    x2={1}
+                    y2={shape.v}
+                    stroke="transparent"
+                    strokeWidth={0.02}
+                    strokeLinecap="round"
+                    pointerEvents="stroke"
+                    onPointerDown={(e) => {
+                      if (activeTool !== 'select') return;
+                      e.stopPropagation();
+                      onSelectShape(shape.id);
+                      onStartShapeTransform();
+                      setMovingId(shape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(shape);
+                      setActiveHandle('latitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </g>
+              );
+            }
+            if (shape.type === 'longitude') {
+              return (
+                <g key={shape.id}>
+                  <line
+                    x1={shape.u}
+                    y1={0}
+                    x2={shape.u}
+                    y2={1}
+                    stroke={shape.stroke}
+                    strokeWidth={shape.strokeWidth}
+                    strokeLinecap="round"
+                    className={selectedId === shape.id ? 'selected-shape' : ''}
+                  />
+                  <line
+                    x1={shape.u}
+                    y1={0}
+                    x2={shape.u}
+                    y2={1}
+                    stroke="transparent"
+                    strokeWidth={0.02}
+                    strokeLinecap="round"
+                    pointerEvents="stroke"
+                    onPointerDown={(e) => {
+                      if (activeTool !== 'select') return;
+                      e.stopPropagation();
+                      onSelectShape(shape.id);
+                      onStartShapeTransform();
+                      setMovingId(shape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(shape);
+                      setActiveHandle('longitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </g>
+              );
+            }
             if (shape.type === 'rect') {
               return (
                 <g key={shape.id}>
@@ -599,6 +752,82 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                   />
                 </>
               )}
+              {selectedShape.type === 'latitude' && (
+                <>
+                  <circle
+                    cx={0}
+                    cy={selectedShape.v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('latitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                  <circle
+                    cx={1}
+                    cy={selectedShape.v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('latitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </>
+              )}
+              {selectedShape.type === 'longitude' && (
+                <>
+                  <circle
+                    cx={selectedShape.u}
+                    cy={0}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('longitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                  <circle
+                    cx={selectedShape.u}
+                    cy={1}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(selectedShape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(selectedShape);
+                      setActiveHandle('longitude');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </>
+              )}
             </g>
           )}
 
@@ -638,7 +867,156 @@ export const UVEditor: React.FC<UVEditorProps> = ({
               strokeDasharray="0.01 0.01"
             />
           )}
+          {previewShape && previewShape.type === 'latitude' && (
+            <line
+              x1={0}
+              y1={previewShape.v}
+              x2={1}
+              y2={previewShape.v}
+              stroke="#2d68ff"
+              strokeWidth={0.002}
+              strokeDasharray="0.01 0.01"
+            />
+          )}
+          {previewShape && previewShape.type === 'longitude' && (
+            <line
+              x1={previewShape.u}
+              y1={0}
+              x2={previewShape.u}
+              y2={1}
+              stroke="#2d68ff"
+              strokeWidth={0.002}
+              strokeDasharray="0.01 0.01"
+            />
+          )}
         </svg>
+        <div className="uv-footer">
+          {selectedShape ? (
+            <>
+              <span className="uv-footer-label">Selected: {selectedShape.type}</span>
+              <label className="uv-footer-control">
+                Stroke
+                <input
+                  type="color"
+                  value={strokeInput}
+                  onChange={(e) => onStrokeChange(e.target.value)}
+                />
+              </label>
+              <label className="uv-footer-control">
+                Fill
+                <input
+                  type="color"
+                  value={fillInput}
+                  disabled={selectedShape.type === 'line' || selectedShape.type === 'latitude' || selectedShape.type === 'longitude'}
+                  onChange={(e) => onFillChange(e.target.value)}
+                />
+              </label>
+              <button type="button" className="secondary-button" onClick={onDeleteSelected}>
+                Del
+              </button>
+              <button type="button" className="secondary-button" onClick={onDuplicateSelected}>
+                Dup
+              </button>
+              <label className="uv-footer-control">
+                U
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="1"
+                  value={shapePosition(selectedShape).u.toFixed(3)}
+                  onChange={(e) => {
+                    const next = clamp01(Number(e.target.value));
+                    onStartShapeTransform();
+                    onTransformShape(selectedShape.id, setShapePosition(selectedShape, next, shapePosition(selectedShape).v));
+                  }}
+                />
+              </label>
+              <label className="uv-footer-control">
+                V
+                <input
+                  type="number"
+                  step="0.001"
+                  min="0"
+                  max="1"
+                  value={shapePosition(selectedShape).v.toFixed(3)}
+                  onChange={(e) => {
+                    const next = clamp01(Number(e.target.value));
+                    onStartShapeTransform();
+                    onTransformShape(selectedShape.id, setShapePosition(selectedShape, shapePosition(selectedShape).u, next));
+                  }}
+                />
+              </label>
+              {selectedShape.type === 'circle' && (
+                <label className="uv-footer-control">
+                  Radius
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0.0001"
+                    value={selectedShape.radius.toFixed(3)}
+                    onChange={(e) => {
+                      const next = Math.max(0.0001, Number(e.target.value));
+                      onStartShapeTransform();
+                      onTransformShape(selectedShape.id, { ...selectedShape, radius: next });
+                    }}
+                  />
+                </label>
+              )}
+              {selectedShape.type === 'rect' && (
+                <>
+                  <label className="uv-footer-control">
+                    Width
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0.0001"
+                      value={selectedShape.size.w.toFixed(3)}
+                      onChange={(e) => {
+                        const next = Math.max(0.0001, Number(e.target.value));
+                        onStartShapeTransform();
+                        onTransformShape(selectedShape.id, { ...selectedShape, size: { ...selectedShape.size, w: next } });
+                      }}
+                    />
+                  </label>
+                  <label className="uv-footer-control">
+                    Height
+                    <input
+                      type="number"
+                      step="0.001"
+                      min="0.0001"
+                      value={selectedShape.size.h.toFixed(3)}
+                      onChange={(e) => {
+                        const next = Math.max(0.0001, Number(e.target.value));
+                        onStartShapeTransform();
+                        onTransformShape(selectedShape.id, { ...selectedShape, size: { ...selectedShape.size, h: next } });
+                      }}
+                    />
+                  </label>
+                </>
+              )}
+              {selectedShape.type === 'line' && (
+                <label className="uv-footer-control">
+                  Length
+                  <input
+                    type="number"
+                    step="0.001"
+                    min="0.0001"
+                    value={lineLength(selectedShape).toFixed(3)}
+                    onChange={(e) => {
+                      const next = Math.max(0.0001, Number(e.target.value));
+                      const updated = setLineLength(selectedShape, next);
+                      onStartShapeTransform();
+                      onTransformShape(selectedShape.id, updated);
+                    }}
+                  />
+                </label>
+              )}
+            </>
+          ) : (
+            <span className="uv-footer-label">No selection</span>
+          )}
+        </div>
       </div>
     </div>
   );

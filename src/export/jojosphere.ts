@@ -7,7 +7,11 @@ export interface JojosphereState {
   showGuides: boolean;
   showGradient: boolean;
   showDots: boolean;
-  projection: ProjectionType;
+  fadeBackfaces?: boolean;
+  projection?: ProjectionType;
+  flipU?: boolean;
+  flipV?: boolean;
+  transparentSphere?: boolean;
   scene: Scene;
 }
 

@@ -29,7 +29,23 @@ export interface CircleShape {
   fill: string | null;
 }
 
-export type Shape = LineShape | RectShape | CircleShape;
+export interface LatitudeShape {
+  id: string;
+  type: 'latitude';
+  v: number;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export interface LongitudeShape {
+  id: string;
+  type: 'longitude';
+  u: number;
+  stroke: string;
+  strokeWidth: number;
+}
+
+export type Shape = LineShape | RectShape | CircleShape | LatitudeShape | LongitudeShape;
 
 export interface Scene {
   shapes: Shape[];

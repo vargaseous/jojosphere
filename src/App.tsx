@@ -1,7 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { UVEditor } from './uv/UVEditor';
 import { SpherePreview } from './sphere/SpherePreview';
-import { initialScene, Scene, Shape } from './model/scene';
+import { initialScene, Scene, Shape, createId } from './model/scene';
 import { ProjectionType, Rotation } from './geometry/projection';
 import { exportSphereSvg } from './export/exportSvg';
 import { sceneToUvSvg, uvSvgToShapes } from './export/uvSvg';
@@ -26,7 +26,11 @@ const App: React.FC = () => {
   const [requireMarker, setRequireMarker] = useState(true);
   const [showGradient, setShowGradient] = useState(false);
   const [showDots, setShowDots] = useState(false);
-  const [projectionType, setProjectionType] = useState<ProjectionType>('orthographic');
+  const [projectionType, setProjectionType] = useState<ProjectionType>('perspective');
+  const [flipU, setFlipU] = useState(false);
+  const [flipV, setFlipV] = useState(false);
+  const [transparentSphere, setTransparentSphere] = useState(false);
+  const [fadeBackfaces, setFadeBackfaces] = useState(false);
 
   useEffect(() => {
     sceneRef.current = scene;
@@ -46,7 +50,7 @@ const App: React.FC = () => {
   useEffect(() => {
     if (!selectedShape) return;
     setStrokeInput(selectedShape.stroke);
-    if (selectedShape.type !== 'line') {
+    if (selectedShape.type === 'rect' || selectedShape.type === 'circle') {
       setFillInput(selectedShape.fill ?? '#e5e5e5');
     }
   }, [selectedShape]);
@@ -61,7 +65,7 @@ const App: React.FC = () => {
     setScene((prev) => ({ shapes: [...prev.shapes, shape] }));
     setSelectedId(shape.id);
     setStrokeInput(shape.stroke);
-    if (shape.type !== 'line') {
+    if (shape.type === 'rect' || shape.type === 'circle') {
       setFillInput(shape.fill ?? '#e5e5e5');
     }
   };
@@ -80,6 +84,16 @@ const App: React.FC = () => {
     setSelectedId(null);
   };
 
+  const handleDuplicateSelected = () => {
+    if (!selectedId) return;
+    const shape = scene.shapes.find((s) => s.id === selectedId);
+    if (!shape) return;
+    pushHistory();
+    const clone: Shape = { ...shape, id: createId('dup') };
+    setScene((prev) => ({ shapes: [...prev.shapes, clone] }));
+    setSelectedId(clone.id);
+  };
+
   const handleUndo = () => {
     if (!history.length) return;
     const prev = history[history.length - 1];
@@ -90,7 +104,12 @@ const App: React.FC = () => {
   };
 
   const handleExport = () => {
-    const svgString = exportSphereSvg(scene, rotation, { showGuides }, projectionType);
+    const svgString = exportSphereSvg(
+      scene,
+      rotation,
+      { showGuides, orientation: { flipU, flipV }, transparentSphere, fadeBackfaces },
+      projectionType,
+    );
     const blob = new Blob([svgString], { type: 'image/svg+xml' });
     const url = URL.createObjectURL(blob);
     const link = document.createElement('a');
@@ -139,7 +158,11 @@ const App: React.FC = () => {
       showGuides,
       showGradient,
       showDots,
+      fadeBackfaces,
       projection: projectionType,
+      flipU,
+      flipV,
+      transparentSphere,
       scene,
     };
     const json = serializeJojosphere(data);
@@ -167,7 +190,11 @@ const App: React.FC = () => {
         setShowGuides(state.showGuides);
         setShowGradient(state.showGradient);
         setShowDots(state.showDots);
-        setProjectionType(state.projection);
+        setFadeBackfaces(state.fadeBackfaces ?? false);
+        setProjectionType(state.projection ?? 'perspective');
+        setFlipU(state.flipU ?? false);
+        setFlipV(state.flipV ?? false);
+        setTransparentSphere(state.transparentSphere ?? false);
         setSelectedId(null);
       } catch (err) {
         // eslint-disable-next-line no-alert
@@ -187,17 +214,41 @@ const App: React.FC = () => {
         <label>
           Rot X (°)
           <input type="range" min={-180} max={180} step={1} value={rotX} onChange={(e) => setRotX(Number(e.target.value))} />
-          <span>{rotX}</span>
+          <input
+            className="number-input"
+            type="number"
+            min={-180}
+            max={180}
+            step={1}
+            value={rotX}
+            onChange={(e) => setRotX(Number(e.target.value))}
+          />
         </label>
         <label>
           Rot Y (°)
           <input type="range" min={-180} max={180} step={1} value={rotY} onChange={(e) => setRotY(Number(e.target.value))} />
-          <span>{rotY}</span>
+          <input
+            className="number-input"
+            type="number"
+            min={-180}
+            max={180}
+            step={1}
+            value={rotY}
+            onChange={(e) => setRotY(Number(e.target.value))}
+          />
         </label>
         <label>
           Rot Z (°)
           <input type="range" min={-180} max={180} step={1} value={rotZ} onChange={(e) => setRotZ(Number(e.target.value))} />
-          <span>{rotZ}</span>
+          <input
+            className="number-input"
+            type="number"
+            min={-180}
+            max={180}
+            step={1}
+            value={rotZ}
+            onChange={(e) => setRotZ(Number(e.target.value))}
+          />
         </label>
         <label className="checkbox">
           Projection scheme
@@ -206,6 +257,14 @@ const App: React.FC = () => {
             <option value="perspective">Perspective</option>
             <option value="stereographic">Stereographic</option>
           </select>
+        </label>
+        <label className="checkbox">
+          <input type="checkbox" checked={flipU} onChange={(e) => setFlipU(e.target.checked)} />
+          Flip U
+        </label>
+        <label className="checkbox">
+          <input type="checkbox" checked={flipV} onChange={(e) => setFlipV(e.target.checked)} />
+          Flip V
         </label>
 
         <button type="button" className="secondary-button" onClick={handleUndo} disabled={!history.length}>
@@ -265,13 +324,14 @@ const App: React.FC = () => {
             handleUpdateShape(
               selectedId,
               (s) => {
-                if (s.type === 'line') return s;
+                if (s.type === 'line' || s.type === 'latitude' || s.type === 'longitude') return s;
                 return { ...s, fill: value };
               },
               true,
             );
           }}
           onDeleteSelected={handleDeleteSelected}
+          onDuplicateSelected={handleDuplicateSelected}
         />
         <SpherePreview
           scene={scene}
@@ -279,10 +339,15 @@ const App: React.FC = () => {
           showGuides={showGuides}
           showGradient={showGradient}
           showDots={showDots}
+          transparentSphere={transparentSphere}
+          fadeBackfaces={fadeBackfaces}
           projectionType={projectionType}
+          orientation={{ flipU, flipV }}
           onToggleGuides={(next) => setShowGuides(next)}
           onToggleGradient={(next) => setShowGradient(next)}
           onToggleDots={(next) => setShowDots(next)}
+          onToggleTransparentSphere={(next) => setTransparentSphere(next)}
+          onToggleFadeBackfaces={(next) => setFadeBackfaces(next)}
         />
       </main>
       <input

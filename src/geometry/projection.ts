@@ -1,4 +1,4 @@
-import { CircleShape, LineShape, RectShape, Shape, Vec2 } from '../model/scene';
+import { CircleShape, LatitudeShape, LineShape, LongitudeShape, RectShape, Shape, Vec2 } from '../model/scene';
 
 export type ProjectionType = 'orthographic' | 'perspective' | 'stereographic';
 
@@ -17,6 +17,20 @@ export interface Vec3 {
 export interface Vec2XY {
   x: number;
   y: number;
+}
+
+export interface UvOrientation {
+  flipU?: boolean;
+  flipV?: boolean;
+}
+
+function orientUV(point: Vec2, orientation?: UvOrientation): Vec2 {
+  if (!orientation) return point;
+  const { flipU, flipV } = orientation;
+  return {
+    u: flipU ? 1 - point.u : point.u,
+    v: flipV ? 1 - point.v : point.v,
+  };
 }
 
 export function uvToSphere(u: number, v: number): Vec3 {
@@ -57,14 +71,14 @@ export function applyRotation(p: Vec3, rot: Rotation): Vec3 {
   return { x: x3, y: y3, z: z3 };
 }
 
-export function projectOrthographic(p: Vec3): Vec2XY | null {
-  if (p.z < 0) {
+export function projectOrthographic(p: Vec3, allowBack = false): Vec2XY | null {
+  if (!allowBack && p.z < 0) {
     return null;
   }
   return { x: p.x, y: p.y };
 }
 
-function projectPerspective(p: Vec3, cameraZ = 3): Vec2XY | null {
+function projectPerspective(p: Vec3, cameraZ = 4): Vec2XY | null {
   const denom = cameraZ - p.z;
   if (denom <= 0) return null;
   const x = (p.x * cameraZ) / denom;
@@ -78,10 +92,17 @@ function projectStereographic(p: Vec3): Vec2XY | null {
   return { x: p.x / denom, y: p.y / denom };
 }
 
-export function uvPointToXY(point: Vec2, rotation: Rotation, projection: ProjectionType = 'orthographic'): Vec2XY | null {
-  const spherePoint = uvToSphere(point.u, point.v);
+export function uvPointToXY(
+  point: Vec2,
+  rotation: Rotation,
+  projection: ProjectionType = 'orthographic',
+  orientation?: UvOrientation,
+  includeBackFaces = false,
+): Vec2XY | null {
+  const oriented = orientUV(point, orientation);
+  const spherePoint = uvToSphere(oriented.u, oriented.v);
   const rotated = applyRotation(spherePoint, rotation);
-  if (projection === 'orthographic') return projectOrthographic(rotated);
+  if (projection === 'orthographic') return projectOrthographic(rotated, includeBackFaces);
   if (projection === 'perspective') return projectPerspective(rotated);
   return projectStereographic(rotated);
 }
@@ -141,12 +162,36 @@ function sampleCircle(shape: CircleShape, samples: number): TessellatedShape {
   return { points: pts, closed: true };
 }
 
+function sampleLatitude(shape: LatitudeShape, samples: number): TessellatedShape {
+  const pts: Vec2[] = [];
+  for (let i = 0; i <= samples; i += 1) {
+    const t = i / samples;
+    pts.push({ u: t, v: shape.v });
+  }
+  return { points: pts, closed: true };
+}
+
+function sampleLongitude(shape: LongitudeShape, samples: number): TessellatedShape {
+  const pts: Vec2[] = [];
+  for (let i = 0; i <= samples; i += 1) {
+    const t = i / samples;
+    pts.push({ u: shape.u, v: t });
+  }
+  return { points: pts, closed: true };
+}
+
 export function tessellateShape(shape: Shape, samples = 32): TessellatedShape {
   if (shape.type === 'line') {
     return sampleLine(shape, samples);
   }
   if (shape.type === 'rect') {
     return sampleRect(shape, samples);
+  }
+  if (shape.type === 'latitude') {
+    return sampleLatitude(shape, samples);
+  }
+  if (shape.type === 'longitude') {
+    return sampleLongitude(shape, samples);
   }
   return sampleCircle(shape, samples);
 }
@@ -391,14 +436,48 @@ export function projectShapeToXY(
   rotation: Rotation,
   samples = 32,
   projection: ProjectionType = 'orthographic',
-): { points: Vec2XY[]; closed: boolean } {
+  orientation?: UvOrientation,
+  includeBackFaces = false,
+  splitBackFaces = false,
+): { points: Vec2XY[]; backPoints?: Vec2XY[]; closed: boolean } {
   const { points: uvPoints, closed } = tessellateShape(shape, samples);
-  const rotated: Vec3[] = uvPoints.map((uv) => applyRotation(uvToSphere(uv.u, uv.v), rotation));
-  const clipped3D = closed ? clipPolygonToFrontHemisphere(rotated) : clipPolylineToFrontHemisphere(rotated, closed);
+  const rotated: Vec3[] = uvPoints.map((uv) => {
+    const oriented = orientUV(uv, orientation);
+    return applyRotation(uvToSphere(oriented.u, oriented.v), rotation);
+  });
+  const isGreatCircle = shape.type === 'latitude' || shape.type === 'longitude';
+  if (includeBackFaces && splitBackFaces) {
+    const front: Vec2XY[] = [];
+    const back: Vec2XY[] = [];
+    for (const p of rotated) {
+      const target = p.z >= 0 ? front : back;
+      const xy =
+        projection === 'orthographic'
+          ? projectOrthographic(p, true)
+          : projection === 'perspective'
+            ? projectPerspective(p)
+            : projectStereographic(p);
+      if (xy) target.push(xy);
+    }
+    return { points: front, backPoints: back, closed };
+  }
+
+  const clipped3D = includeBackFaces
+    ? rotated
+    : isGreatCircle
+      ? clipPolylineToFrontHemisphere(rotated, true)
+      : closed
+        ? clipPolygonToFrontHemisphere(rotated)
+        : clipPolylineToFrontHemisphere(rotated, closed);
 
   let projected: Vec2XY[] = [];
   for (const p of clipped3D) {
-    const xy = projection === 'orthographic' ? projectOrthographic(p) : projection === 'perspective' ? projectPerspective(p) : projectStereographic(p);
+    const xy =
+      projection === 'orthographic'
+        ? projectOrthographic(p, includeBackFaces)
+        : projection === 'perspective'
+          ? projectPerspective(p)
+          : projectStereographic(p);
     if (xy) projected.push(xy);
   }
 
