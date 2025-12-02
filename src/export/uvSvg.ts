@@ -1,4 +1,4 @@
-import { CircleShape, LatitudeShape, LineShape, LongitudeShape, RectShape, Scene, Shape } from '../model/scene';
+import { CircleShape, LatitudeShape, LineShape, LongitudeShape, PolygonShape, RectShape, Scene, Shape } from '../model/scene';
 
 function shapeToSvg(shape: Shape): string {
   if (shape.type === 'line') {
@@ -9,6 +9,11 @@ function shapeToSvg(shape: Shape): string {
     const s = shape as RectShape;
     const fill = s.fill ?? 'none';
     return `<rect x="${s.origin.u}" y="${s.origin.v}" width="${s.size.w}" height="${s.size.h}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" fill="${fill}" />`;
+  }
+  if (shape.type === 'polygon') {
+    const s = shape as PolygonShape;
+    const fill = s.fill ?? 'none';
+    return `<polygon data-uv-regular="true" cx="${s.center.u}" cy="${s.center.v}" r="${s.radius}" sides="${s.sides}" rotation="${s.rotation}" stroke="${s.stroke}" stroke-width="${s.strokeWidth}" fill="${fill}" />`;
   }
   if (shape.type === 'latitude') {
     const s = shape as LatitudeShape;
@@ -99,6 +104,53 @@ export function uvSvgToShapes(svgString: string, requireMarker = false): Shape[]
       stroke: el.getAttribute('stroke') || '#000000',
       strokeWidth: attrNum(el, 'stroke-width', 0.002),
     });
+  });
+
+  const polygons = Array.from(doc.querySelectorAll('polygon'));
+  polygons.forEach((el, idx) => {
+    if (el.getAttribute('data-uv-regular') === 'true') {
+      shapes.push({
+        id: `polygon-import-${idx}`,
+        type: 'polygon',
+        center: { u: attrNum(el, 'cx', 0.5), v: attrNum(el, 'cy', 0.5) },
+        radius: attrNum(el, 'r', 0.1),
+        sides: Math.max(3, Math.round(attrNum(el, 'sides', 5))),
+        rotation: attrNum(el, 'rotation', 0),
+        stroke: el.getAttribute('stroke') || '#000000',
+        strokeWidth: attrNum(el, 'stroke-width', 0.002),
+        fill: el.getAttribute('fill') || null,
+      });
+      return;
+    }
+    // Fallback: parse generic polygon points as a non-regular polygon approximated by center/radius
+    const ptsAttr = el.getAttribute('points') || '';
+    const pts = ptsAttr
+      .split(/\s+/)
+      .map((p) => p.trim())
+      .filter(Boolean)
+      .map((pair) => pair.split(',').map(Number))
+      .filter((p) => p.length === 2 && Number.isFinite(p[0]) && Number.isFinite(p[1]));
+    if (pts.length >= 3) {
+      const avgU = pts.reduce((sum, p) => sum + p[0], 0) / pts.length;
+      const avgV = pts.reduce((sum, p) => sum + p[1], 0) / pts.length;
+      const radius = Math.max(
+        0.0001,
+        Math.sqrt(
+          pts.reduce((sum, p) => sum + (p[0] - avgU) * (p[0] - avgU) + (p[1] - avgV) * (p[1] - avgV), 0) / pts.length,
+        ),
+      );
+      shapes.push({
+        id: `polygon-import-${idx}`,
+        type: 'polygon',
+        center: { u: avgU, v: avgV },
+        radius,
+        sides: pts.length,
+        rotation: 0,
+        stroke: el.getAttribute('stroke') || '#000000',
+        strokeWidth: attrNum(el, 'stroke-width', 0.002),
+        fill: el.getAttribute('fill') || null,
+      });
+    }
   });
 
   const circles = Array.from(doc.querySelectorAll('circle'));

@@ -1,4 +1,4 @@
-import { CircleShape, LatitudeShape, LineShape, LongitudeShape, RectShape, Shape, Vec2 } from '../model/scene';
+import { CircleShape, LatitudeShape, LineShape, LongitudeShape, PolygonShape, RectShape, Shape, Vec2 } from '../model/scene';
 
 export type ProjectionType = 'orthographic' | 'perspective' | 'stereographic';
 
@@ -162,6 +162,21 @@ function sampleCircle(shape: CircleShape, samples: number): TessellatedShape {
   return { points: pts, closed: true };
 }
 
+function samplePolygon(shape: PolygonShape, samples: number): TessellatedShape {
+  const pts: Vec2[] = [];
+  const { center, radius, sides, rotation } = shape;
+  const steps = Math.max(sides, samples);
+  for (let i = 0; i <= sides; i += 1) {
+    const t = i / sides;
+    const ang = rotation + t * Math.PI * 2;
+    pts.push({
+      u: center.u + radius * Math.cos(ang),
+      v: center.v + radius * Math.sin(ang),
+    });
+  }
+  return { points: pts, closed: true };
+}
+
 function sampleLatitude(shape: LatitudeShape, samples: number): TessellatedShape {
   const pts: Vec2[] = [];
   for (let i = 0; i <= samples; i += 1) {
@@ -186,6 +201,9 @@ export function tessellateShape(shape: Shape, samples = 32): TessellatedShape {
   }
   if (shape.type === 'rect') {
     return sampleRect(shape, samples);
+  }
+  if (shape.type === 'polygon') {
+    return samplePolygon(shape, samples);
   }
   if (shape.type === 'latitude') {
     return sampleLatitude(shape, samples);

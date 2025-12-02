@@ -14,7 +14,7 @@ const App: React.FC = () => {
   const [rotX, setRotX] = useState(0);
   const [rotY, setRotY] = useState(0);
   const [rotZ, setRotZ] = useState(0);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [strokeInput, setStrokeInput] = useState('#000000');
   const [fillInput, setFillInput] = useState('#e5e5e5');
   const [showGuides, setShowGuides] = useState(true);
@@ -45,15 +45,19 @@ const App: React.FC = () => {
     [rotX, rotY, rotZ],
   );
 
-  const selectedShape = useMemo(() => scene.shapes.find((s) => s.id === selectedId) ?? null, [scene.shapes, selectedId]);
+  const selectedShapes = useMemo(
+    () => scene.shapes.filter((s) => selectedIds.includes(s.id)),
+    [scene.shapes, selectedIds],
+  );
+  const primarySelected = selectedShapes[0] ?? null;
 
   useEffect(() => {
-    if (!selectedShape) return;
-    setStrokeInput(selectedShape.stroke);
-    if (selectedShape.type === 'rect' || selectedShape.type === 'circle') {
-      setFillInput(selectedShape.fill ?? '#e5e5e5');
+    if (!primarySelected) return;
+    setStrokeInput(primarySelected.stroke);
+    if (primarySelected.type === 'rect' || primarySelected.type === 'circle' || primarySelected.type === 'polygon') {
+      setFillInput(primarySelected.fill ?? '#e5e5e5');
     }
-  }, [selectedShape]);
+  }, [primarySelected]);
 
   const pushHistory = () => {
     setHistory((h) => [...h, sceneRef.current]);
@@ -63,7 +67,7 @@ const App: React.FC = () => {
   const handleAddShape = (shape: Shape) => {
     pushHistory();
     setScene((prev) => ({ shapes: [...prev.shapes, shape] }));
-    setSelectedId(shape.id);
+    setSelectedIds([shape.id]);
     setStrokeInput(shape.stroke);
     if (shape.type === 'rect' || shape.type === 'circle') {
       setFillInput(shape.fill ?? '#e5e5e5');
@@ -78,20 +82,154 @@ const App: React.FC = () => {
   };
 
   const handleDeleteSelected = () => {
-    if (!selectedId) return;
+    if (!selectedIds.length) return;
     pushHistory();
-    setScene((prev) => ({ shapes: prev.shapes.filter((s) => s.id !== selectedId) }));
-    setSelectedId(null);
+    setScene((prev) => ({ shapes: prev.shapes.filter((s) => !selectedIds.includes(s.id)) }));
+    setSelectedIds([]);
   };
 
   const handleDuplicateSelected = () => {
-    if (!selectedId) return;
-    const shape = scene.shapes.find((s) => s.id === selectedId);
-    if (!shape) return;
+    if (!selectedIds.length) return;
+    const shapesToCopy = scene.shapes.filter((s) => selectedIds.includes(s.id));
+    if (!shapesToCopy.length) return;
     pushHistory();
-    const clone: Shape = { ...shape, id: createId('dup') };
-    setScene((prev) => ({ shapes: [...prev.shapes, clone] }));
-    setSelectedId(clone.id);
+    const clones = shapesToCopy.map((shape) => ({ ...shape, id: createId('dup') }));
+    setScene((prev) => ({ shapes: [...prev.shapes, ...clones] }));
+    setSelectedIds(clones.map((c) => c.id));
+  };
+
+  const updateSelectedShapes = (updater: (shape: Shape) => Shape) => {
+    if (!selectedIds.length) return;
+    pushHistory();
+    setScene((prev) => ({
+      shapes: prev.shapes.map((s) => (selectedIds.includes(s.id) ? updater(s) : s)),
+    }));
+  };
+
+  const shapeBounds = (shape: Shape) => {
+    if (shape.type === 'line') {
+      return {
+        minU: Math.min(shape.a.u, shape.b.u),
+        maxU: Math.max(shape.a.u, shape.b.u),
+        minV: Math.min(shape.a.v, shape.b.v),
+        maxV: Math.max(shape.a.v, shape.b.v),
+      };
+    }
+    if (shape.type === 'rect') {
+      return {
+        minU: shape.origin.u,
+        maxU: shape.origin.u + shape.size.w,
+        minV: shape.origin.v,
+        maxV: shape.origin.v + shape.size.h,
+      };
+    }
+    if (shape.type === 'polygon') {
+      return {
+        minU: shape.center.u - shape.radius,
+        maxU: shape.center.u + shape.radius,
+        minV: shape.center.v - shape.radius,
+        maxV: shape.center.v + shape.radius,
+      };
+    }
+    if (shape.type === 'circle') {
+      return {
+        minU: shape.center.u - shape.radius,
+        maxU: shape.center.u + shape.radius,
+        minV: shape.center.v - shape.radius,
+        maxV: shape.center.v + shape.radius,
+      };
+    }
+    if (shape.type === 'latitude') {
+      return { minU: 0, maxU: 1, minV: shape.v, maxV: shape.v };
+    }
+    return { minU: shape.u, maxU: shape.u, minV: 0, maxV: 1 };
+  };
+
+  const moveShapeBy = (shape: Shape, du: number, dv: number): Shape => {
+    if (shape.type === 'line') {
+      return { ...shape, a: { u: shape.a.u + du, v: shape.a.v + dv }, b: { u: shape.b.u + du, v: shape.b.v + dv } };
+    }
+    if (shape.type === 'rect') {
+      return { ...shape, origin: { u: shape.origin.u + du, v: shape.origin.v + dv } };
+    }
+    if (shape.type === 'polygon') {
+      return { ...shape, center: { u: shape.center.u + du, v: shape.center.v + dv } };
+    }
+    if (shape.type === 'circle') {
+      return { ...shape, center: { u: shape.center.u + du, v: shape.center.v + dv } };
+    }
+    if (shape.type === 'latitude') {
+      return { ...shape, v: shape.v + dv };
+    }
+    if (shape.type === 'longitude') {
+      return { ...shape, u: shape.u + du };
+    }
+    return shape;
+  };
+
+  const shapeCenter = (shape: Shape): { u: number; v: number } => {
+    if (shape.type === 'line') return { u: (shape.a.u + shape.b.u) / 2, v: (shape.a.v + shape.b.v) / 2 };
+    if (shape.type === 'rect') return { u: shape.origin.u + shape.size.w / 2, v: shape.origin.v + shape.size.h / 2 };
+    if (shape.type === 'polygon') return shape.center;
+    if (shape.type === 'circle') return shape.center;
+    if (shape.type === 'latitude') return { u: 0.5, v: shape.v };
+    return { u: shape.u, v: 0.5 };
+  };
+
+  const setShapeCenter = (shape: Shape, u: number, v: number): Shape => {
+    const center = shapeCenter(shape);
+    const du = u - center.u;
+    const dv = v - center.v;
+    return moveShapeBy(shape, du, dv);
+  };
+
+  const alignSelected = (axis: 'h' | 'v', mode: 'start' | 'center' | 'end') => {
+    const targets = selectedShapes.filter((s) => s.type !== 'latitude' && s.type !== 'longitude');
+    if (targets.length < 2) return;
+    const bounds = targets.map(shapeBounds);
+    const globalMin = axis === 'h' ? Math.min(...bounds.map((b) => b.minU)) : Math.min(...bounds.map((b) => b.minV));
+    const globalMax = axis === 'h' ? Math.max(...bounds.map((b) => b.maxU)) : Math.max(...bounds.map((b) => b.maxV));
+    const targetCoord =
+      mode === 'start' ? globalMin : mode === 'end' ? globalMax : (globalMin + globalMax) / 2;
+
+    pushHistory();
+    setScene((prev) => ({
+      shapes: prev.shapes.map((s) => {
+        if (!selectedIds.includes(s.id)) return s;
+        if (s.type === 'latitude' || s.type === 'longitude') return s;
+        const b = shapeBounds(s);
+        const center = shapeCenter(s);
+        if (axis === 'h') {
+          if (mode === 'center') return setShapeCenter(s, targetCoord, center.v);
+          if (mode === 'start') return moveShapeBy(s, targetCoord - b.minU, 0);
+          return moveShapeBy(s, targetCoord - b.maxU, 0);
+        }
+        if (mode === 'center') return setShapeCenter(s, center.u, targetCoord);
+        if (mode === 'start') return moveShapeBy(s, 0, targetCoord - b.minV);
+        return moveShapeBy(s, 0, targetCoord - b.maxV);
+      }),
+    }));
+  };
+
+  const distributeSelected = (axis: 'h' | 'v') => {
+    const targets = selectedShapes.filter((s) => s.type !== 'latitude' && s.type !== 'longitude');
+    if (targets.length < 3) return;
+    const sorted = [...targets].sort((a, b) => (axis === 'h' ? shapeCenter(a).u - shapeCenter(b).u : shapeCenter(a).v - shapeCenter(b).v));
+    const centers = sorted.map((s) => shapeCenter(s));
+    const min = axis === 'h' ? centers[0].u : centers[0].v;
+    const max = axis === 'h' ? centers[centers.length - 1].u : centers[centers.length - 1].v;
+    const step = (max - min) / (centers.length - 1);
+
+    pushHistory();
+    setScene((prev) => ({
+      shapes: prev.shapes.map((s) => {
+        const idx = sorted.findIndex((item) => item.id === s.id);
+        if (idx === -1) return s;
+        const target = min + step * idx;
+        const current = shapeCenter(s);
+        return axis === 'h' ? setShapeCenter(s, target, current.v) : setShapeCenter(s, current.u, target);
+      }),
+    }));
   };
 
   const handleUndo = () => {
@@ -100,7 +238,7 @@ const App: React.FC = () => {
     setHistory((h) => h.slice(0, -1));
     setFuture((f) => [sceneRef.current, ...f]);
     setScene(prev);
-    setSelectedId((id) => (prev.shapes.some((s) => s.id === id) ? id : null));
+    setSelectedIds((ids) => ids.filter((id) => prev.shapes.some((s) => s.id === id)));
   };
 
   const handleExport = () => {
@@ -142,7 +280,7 @@ const App: React.FC = () => {
         const shapes = uvSvgToShapes(text, requireMarker);
         pushHistory();
         setScene({ shapes });
-        setSelectedId(null);
+        setSelectedIds([]);
       } catch (err) {
         // eslint-disable-next-line no-alert
         alert((err as Error).message);
@@ -195,7 +333,7 @@ const App: React.FC = () => {
         setFlipU(state.flipU ?? false);
         setFlipV(state.flipV ?? false);
         setTransparentSphere(state.transparentSphere ?? false);
-        setSelectedId(null);
+        setSelectedIds([]);
       } catch (err) {
         // eslint-disable-next-line no-alert
         alert((err as Error).message);
@@ -296,42 +434,33 @@ const App: React.FC = () => {
         <UVEditor
           scene={scene}
           onAddShape={handleAddShape}
-          selectedId={selectedId}
-          onSelectShape={setSelectedId}
+          selectedIds={selectedIds}
+          onSelectShapes={setSelectedIds}
           onStartShapeTransform={pushHistory}
           onTransformShape={(id, shape) => handleUpdateShape(id, () => shape, false)}
           showGuides={showGuides}
           showGradient={showGradient}
           showDots={showDots}
-          selectedShape={selectedShape}
+          selectedShapes={selectedShapes}
           strokeInput={strokeInput}
           fillInput={fillInput}
           onStrokeChange={(value) => {
             setStrokeInput(value);
-            if (!selectedId) return;
-            handleUpdateShape(
-              selectedId,
-              (s) => ({
-                ...s,
-                stroke: value,
-              }),
-              true,
-            );
+            if (!selectedIds.length) return;
+            updateSelectedShapes((s) => ({ ...s, stroke: value }));
           }}
           onFillChange={(value) => {
             setFillInput(value);
-            if (!selectedId) return;
-            handleUpdateShape(
-              selectedId,
-              (s) => {
-                if (s.type === 'line' || s.type === 'latitude' || s.type === 'longitude') return s;
-                return { ...s, fill: value };
-              },
-              true,
-            );
+            if (!selectedIds.length) return;
+            updateSelectedShapes((s) => {
+              if (s.type === 'line' || s.type === 'latitude' || s.type === 'longitude') return s;
+              return { ...s, fill: value };
+            });
           }}
           onDeleteSelected={handleDeleteSelected}
           onDuplicateSelected={handleDuplicateSelected}
+          onAlign={alignSelected}
+          onDistribute={distributeSelected}
         />
         <SpherePreview
           scene={scene}

@@ -29,6 +29,18 @@ export interface CircleShape {
   fill: string | null;
 }
 
+export interface PolygonShape {
+  id: string;
+  type: 'polygon';
+  center: Vec2;
+  radius: number;
+  sides: number;
+  rotation: number; // radians
+  stroke: string;
+  strokeWidth: number;
+  fill: string | null;
+}
+
 export interface LatitudeShape {
   id: string;
   type: 'latitude';
@@ -45,7 +57,7 @@ export interface LongitudeShape {
   strokeWidth: number;
 }
 
-export type Shape = LineShape | RectShape | CircleShape | LatitudeShape | LongitudeShape;
+export type Shape = LineShape | RectShape | CircleShape | PolygonShape | LatitudeShape | LongitudeShape;
 
 export interface Scene {
   shapes: Shape[];

@@ -1,6 +1,16 @@
-# Sphere Editor
+# jojosphere Sphere Editor
 
 React + Vite app for drawing simple UV-space shapes, mapping them onto a sphere, and exporting the projected view as a clean SVG suitable for design tools.
+
+## Why I made (vibecoded) this
+
+I had a project at work that involved drawing geometries on a sphere.
+
+Didn't want to manually calculate the geometry on Illustrator/Affinity and wanted to experiment (wasn't feeling like fiddling with Matplotlib).
+
+I could also just use something like Blender but I wanted the export to be an SVG and not a raster.
+
+So uhhh I thought of this and then used a combination of Gemini and Codex and some manual styling to make it happen. Yay.
 
 ## Getting started
 
@@ -32,8 +42,3 @@ yarn preview
 - **Save UV SVG** downloads the current UV scene (unit square) as an SVG with a marker attribute; **Load UV SVG** imports simple line/rect/circle shapes from an SVG (expects unit-space coords). The **Require UV marker** checkbox enforces that the file includes the marker.
 - **Save/Load .jojosphere** stores the full scene plus settings (rotation, guides, gradient, dots, projection) in JSON.
 - Click **Export sphere SVG** to download a standalone `sphere-export.svg` with the current view (guides included when enabled).
-
-## Notes
-
-- Everything is kept minimal: no external styling dependencies; export uses only basic SVG elements.
-- Back-facing geometry is culled (`z < 0`) rather than clipped at the limb; shapes that cross the terminator will break at the back edge. Tessellation density can be raised in `geometry/projection.ts` if needed.
