@@ -6,6 +6,7 @@ import { ProjectionType, Rotation } from './geometry/projection';
 import { exportSphereSvg } from './export/exportSvg';
 import { sceneToUvSvg, uvSvgToShapes } from './export/uvSvg';
 import { JojosphereState, parseJojosphere, serializeJojosphere } from './export/jojosphere';
+import { FreeNumberInput } from './components/FreeNumberInput';
 
 const degToRad = (deg: number) => (deg * Math.PI) / 180;
 
@@ -352,41 +353,17 @@ const App: React.FC = () => {
         <label>
           Rot X (°)
           <input type="range" min={-180} max={180} step={1} value={rotX} onChange={(e) => setRotX(Number(e.target.value))} />
-          <input
-            className="number-input"
-            type="number"
-            min={-180}
-            max={180}
-            step={1}
-            value={rotX}
-            onChange={(e) => setRotX(Number(e.target.value))}
-          />
+          <FreeNumberInput className="number-input" min={-180} max={180} decimals={1} value={rotX} onChangeValue={setRotX} />
         </label>
         <label>
           Rot Y (°)
           <input type="range" min={-180} max={180} step={1} value={rotY} onChange={(e) => setRotY(Number(e.target.value))} />
-          <input
-            className="number-input"
-            type="number"
-            min={-180}
-            max={180}
-            step={1}
-            value={rotY}
-            onChange={(e) => setRotY(Number(e.target.value))}
-          />
+          <FreeNumberInput className="number-input" min={-180} max={180} decimals={1} value={rotY} onChangeValue={setRotY} />
         </label>
         <label>
           Rot Z (°)
           <input type="range" min={-180} max={180} step={1} value={rotZ} onChange={(e) => setRotZ(Number(e.target.value))} />
-          <input
-            className="number-input"
-            type="number"
-            min={-180}
-            max={180}
-            step={1}
-            value={rotZ}
-            onChange={(e) => setRotZ(Number(e.target.value))}
-          />
+          <FreeNumberInput className="number-input" min={-180} max={180} decimals={1} value={rotZ} onChangeValue={setRotZ} />
         </label>
         <label className="checkbox">
           Projection scheme

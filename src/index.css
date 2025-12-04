@@ -47,6 +47,9 @@ body {
   position: sticky;
   top: 0;
   z-index: 1;
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
 }
 
 .header label {
@@ -60,7 +63,8 @@ body {
   width: 140px;
 }
 
-.number-input {
+.number-input,
+.numeric-input {
   width: 70px;
   padding: 0.25rem 0.35rem;
   border: 1px solid #d0d0d0;
@@ -255,7 +259,7 @@ body {
   padding: 0;
 }
 
-.uv-footer-control input[type="number"] {
+.uv-footer-control .numeric-input {
   width: 70px;
   padding: 0.2rem 0.3rem;
   font-size: 0.85rem;

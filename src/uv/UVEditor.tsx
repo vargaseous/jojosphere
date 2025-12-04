@@ -1,5 +1,6 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Scene, Shape, Vec2, createId, normalizeRect } from '../model/scene';
+import { FreeNumberInput } from '../components/FreeNumberInput';
 
 type Tool = 'select' | 'line' | 'rect' | 'circle' | 'polygon' | 'latitude' | 'longitude';
 
@@ -248,6 +249,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
   const [activeHandle, setActiveHandle] = useState<HandleKind>('move');
 
   const primarySelected = selectedShapes[0] ?? null;
+  const primaryPosition = primarySelected ? shapePosition(primarySelected) : null;
   const allowTransform = selectedShapes.length === 1 && primarySelected;
   const allowAlign = selectedShapes.length >= 2 && !selectedShapes.some((s) => s.type === 'latitude' || s.type === 'longitude');
 
@@ -1058,44 +1060,40 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                 <>
                   <label className="uv-footer-control">
                     U
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      max="1"
-                      value={shapePosition(primarySelected).u.toFixed(3)}
-                      onChange={(e) => {
-                        const next = clamp01(Number(e.target.value));
+                    <FreeNumberInput
+                      value={primaryPosition?.u ?? 0}
+                      min={0}
+                      max={1}
+                      decimals={3}
+                      onChangeValue={(next) => {
+                        if (!primarySelected || !primaryPosition) return;
                         onStartShapeTransform();
-                        onTransformShape(primarySelected.id, setShapePosition(primarySelected, next, shapePosition(primarySelected).v));
+                        onTransformShape(primarySelected.id, setShapePosition(primarySelected, next, primaryPosition.v));
                       }}
                     />
                   </label>
                   <label className="uv-footer-control">
                     V
-                    <input
-                      type="number"
-                      step="0.001"
-                      min="0"
-                      max="1"
-                      value={shapePosition(primarySelected).v.toFixed(3)}
-                      onChange={(e) => {
-                        const next = clamp01(Number(e.target.value));
+                    <FreeNumberInput
+                      value={primaryPosition?.v ?? 0}
+                      min={0}
+                      max={1}
+                      decimals={3}
+                      onChangeValue={(next) => {
+                        if (!primarySelected || !primaryPosition) return;
                         onStartShapeTransform();
-                        onTransformShape(primarySelected.id, setShapePosition(primarySelected, shapePosition(primarySelected).u, next));
+                        onTransformShape(primarySelected.id, setShapePosition(primarySelected, primaryPosition.u, next));
                       }}
-                  />
-                </label>
+                    />
+                  </label>
                   {primarySelected.type === 'circle' && (
                     <label className="uv-footer-control">
                       Radius
-                      <input
-                        type="number"
-                        step="0.001"
-                        min="0.0001"
-                        value={primarySelected.radius.toFixed(3)}
-                        onChange={(e) => {
-                          const next = Math.max(0.0001, Number(e.target.value));
+                      <FreeNumberInput
+                        value={primarySelected.radius}
+                        min={0.0001}
+                        decimals={3}
+                        onChangeValue={(next) => {
                           onStartShapeTransform();
                           onTransformShape(primarySelected.id, { ...primarySelected, radius: next });
                         }}
@@ -1106,28 +1104,27 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                     <>
                       <label className="uv-footer-control">
                         Sides
-                        <input
-                          type="number"
-                          min="3"
-                          max="30"
-                          step="1"
+                        <FreeNumberInput
                           value={primarySelected.sides}
-                          onChange={(e) => {
-                            const next = Math.max(3, Math.min(30, Math.round(Number(e.target.value))));
+                          min={3}
+                          max={30}
+                          decimals={0}
+                          inputMode="numeric"
+                          onChangeValue={(next) => {
+                            const rounded = Math.round(next);
+                            const clamped = Math.min(30, Math.max(3, rounded));
                             onStartShapeTransform();
-                            onTransformShape(primarySelected.id, { ...primarySelected, sides: next });
+                            onTransformShape(primarySelected.id, { ...primarySelected, sides: clamped });
                           }}
                         />
                       </label>
                       <label className="uv-footer-control">
                         Rotation
-                        <input
-                          type="number"
-                          step="1"
-                          value={((primarySelected.rotation * 180) / Math.PI).toFixed(1)}
-                          onChange={(e) => {
-                            const deg = Number(e.target.value);
-                            const rad = (deg * Math.PI) / 180;
+                        <FreeNumberInput
+                          value={(primarySelected.rotation * 180) / Math.PI}
+                          decimals={1}
+                          onChangeValue={(next) => {
+                            const rad = (next * Math.PI) / 180;
                             onStartShapeTransform();
                             onTransformShape(primarySelected.id, { ...primarySelected, rotation: rad });
                           }}
@@ -1135,13 +1132,11 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                       </label>
                       <label className="uv-footer-control">
                         Radius
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0.0001"
-                          value={primarySelected.radius.toFixed(3)}
-                          onChange={(e) => {
-                            const next = Math.max(0.0001, Number(e.target.value));
+                        <FreeNumberInput
+                          value={primarySelected.radius}
+                          min={0.0001}
+                          decimals={3}
+                          onChangeValue={(next) => {
                             onStartShapeTransform();
                             onTransformShape(primarySelected.id, { ...primarySelected, radius: next });
                           }}
@@ -1153,13 +1148,11 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                     <>
                       <label className="uv-footer-control">
                         Width
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0.0001"
-                          value={primarySelected.size.w.toFixed(3)}
-                          onChange={(e) => {
-                            const next = Math.max(0.0001, Number(e.target.value));
+                        <FreeNumberInput
+                          value={primarySelected.size.w}
+                          min={0.0001}
+                          decimals={3}
+                          onChangeValue={(next) => {
                             onStartShapeTransform();
                             onTransformShape(primarySelected.id, { ...primarySelected, size: { ...primarySelected.size, w: next } });
                           }}
@@ -1167,13 +1160,11 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                       </label>
                       <label className="uv-footer-control">
                         Height
-                        <input
-                          type="number"
-                          step="0.001"
-                          min="0.0001"
-                          value={primarySelected.size.h.toFixed(3)}
-                          onChange={(e) => {
-                            const next = Math.max(0.0001, Number(e.target.value));
+                        <FreeNumberInput
+                          value={primarySelected.size.h}
+                          min={0.0001}
+                          decimals={3}
+                          onChangeValue={(next) => {
                             onStartShapeTransform();
                             onTransformShape(primarySelected.id, { ...primarySelected, size: { ...primarySelected.size, h: next } });
                           }}
@@ -1184,13 +1175,11 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                   {primarySelected.type === 'line' && (
                     <label className="uv-footer-control">
                       Length
-                      <input
-                        type="number"
-                        step="0.001"
-                        min="0.0001"
-                        value={lineLength(primarySelected).toFixed(3)}
-                        onChange={(e) => {
-                          const next = Math.max(0.0001, Number(e.target.value));
+                      <FreeNumberInput
+                        value={lineLength(primarySelected)}
+                        min={0.0001}
+                        decimals={3}
+                        onChangeValue={(next) => {
                           const updated = setLineLength(primarySelected, next);
                           onStartShapeTransform();
                           onTransformShape(primarySelected.id, updated);
