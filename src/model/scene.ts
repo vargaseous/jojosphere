@@ -57,7 +57,23 @@ export interface LongitudeShape {
   strokeWidth: number;
 }
 
-export type Shape = LineShape | RectShape | CircleShape | PolygonShape | LatitudeShape | LongitudeShape;
+export interface SvgShape {
+  id: string;
+  type: 'svg';
+  origin: Vec2;
+  scale: number;
+  rotation: number; // radians
+  strokeWidthOverride: number | null;
+  paths: {
+    points: Vec2[];
+    closed: boolean;
+    stroke: string;
+    strokeWidth: number;
+    fill: string | null;
+  }[];
+}
+
+export type Shape = LineShape | RectShape | CircleShape | PolygonShape | LatitudeShape | LongitudeShape | SvgShape;
 
 export interface Scene {
   shapes: Shape[];

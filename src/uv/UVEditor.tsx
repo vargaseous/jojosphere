@@ -1,6 +1,7 @@
 import React, { useMemo, useRef, useState } from 'react';
 import { Scene, Shape, Vec2, createId, normalizeRect } from '../model/scene';
 import { FreeNumberInput } from '../components/FreeNumberInput';
+import { parseSvg } from '../import/svgLoader';
 
 type Tool = 'select' | 'line' | 'rect' | 'circle' | 'polygon' | 'latitude' | 'longitude';
 
@@ -25,7 +26,7 @@ interface UVEditorProps {
   onDistribute: (axis: 'h' | 'v') => void;
 }
 
-type HandleKind = 'move' | 'rect' | 'circle' | 'line-start' | 'line-end' | 'latitude' | 'longitude';
+type HandleKind = 'move' | 'rect' | 'circle' | 'line-start' | 'line-end' | 'latitude' | 'longitude' | 'scale' | 'rotate' | 'rotate-svg';
 
 function clamp01(value: number): number {
   return Math.min(1, Math.max(0, value));
@@ -78,6 +79,29 @@ function shapeBounds(shape: Shape): { minU: number; maxU: number; minV: number; 
   if (shape.type === 'longitude') {
     return { minU: shape.u, maxU: shape.u, minV: 0, maxV: 1 };
   }
+  if (shape.type === 'svg') {
+    let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+    if (shape.paths.length === 0) {
+      return { minU: shape.origin.u, maxU: shape.origin.u, minV: shape.origin.v, maxV: shape.origin.v };
+    }
+    const cos = Math.cos(shape.rotation);
+    const sin = Math.sin(shape.rotation);
+    for (const path of shape.paths) {
+      for (const pt of path.points) {
+        // Rotate then scale then translate
+        const uRot = pt.u * cos - pt.v * sin;
+        const vRot = pt.u * sin + pt.v * cos;
+        const uFinal = shape.origin.u + uRot * shape.scale;
+        const vFinal = shape.origin.v + vRot * shape.scale;
+        
+        if (uFinal < minU) minU = uFinal;
+        if (uFinal > maxU) maxU = uFinal;
+        if (vFinal < minV) minV = vFinal;
+        if (vFinal > maxV) maxV = vFinal;
+      }
+    }
+    return { minU, maxU, minV, maxV };
+  }
   return {
     minU: shape.center.u - shape.radius,
     maxU: shape.center.u + shape.radius,
@@ -103,6 +127,43 @@ function circleHandle(shape: Extract<Shape, { type: 'circle' }>): Vec2 {
 function polygonHandle(shape: Extract<Shape, { type: 'polygon' }>): Vec2 {
   const ang = shape.rotation;
   return { u: shape.center.u + shape.radius * Math.cos(ang), v: shape.center.v + shape.radius * Math.sin(ang) };
+}
+
+function svgScaleHandle(shape: Extract<Shape, { type: 'svg' }>): Vec2 {
+  // Place handle at bottom-right of logical bounding box (unrotated points extent, rotated)
+  // Find max extent of points
+  let maxU = 0, maxV = 0;
+  for (const path of shape.paths) {
+    for (const pt of path.points) {
+      if (Math.abs(pt.u) > maxU) maxU = Math.abs(pt.u); // approximate extent
+      if (Math.abs(pt.v) > maxV) maxV = Math.abs(pt.v);
+    }
+  }
+  // Use a fixed diagonal or calculated corner
+  // Let's use (0.5, 0.5) scaled and rotated if points are in -0.25..0.25
+  const cornerU = 0.25; 
+  const cornerV = 0.25; 
+  
+  const cos = Math.cos(shape.rotation);
+  const sin = Math.sin(shape.rotation);
+  
+  const uRot = cornerU * cos - cornerV * sin;
+  const vRot = cornerU * sin + cornerV * cos;
+  
+  return {
+    u: shape.origin.u + uRot * shape.scale,
+    v: shape.origin.v + vRot * shape.scale,
+  };
+}
+
+function svgRotateHandle(shape: Extract<Shape, { type: 'svg' }>): Vec2 {
+  // Place handle above the object
+  const dist = 0.35 * shape.scale; // Proportional to scale
+  const ang = shape.rotation - Math.PI / 2; // Upwards relative to rotation
+  return {
+    u: shape.origin.u + dist * Math.cos(ang),
+    v: shape.origin.v + dist * Math.sin(ang),
+  };
 }
 
 function lineHandles(shape: Extract<Shape, { type: 'line' }>): { start: Vec2; end: Vec2 } {
@@ -160,6 +221,12 @@ function moveShape(shape: Shape, du: number, dv: number): Shape {
       u: clamp01(shape.u + du),
     };
   }
+  if (shape.type === 'svg') {
+    return {
+      ...shape,
+      origin: { u: shape.origin.u + du, v: shape.origin.v + dv },
+    };
+  }
   return {
     ...shape,
     center: { u: shape.center.u + du, v: shape.center.v + dv },
@@ -182,6 +249,9 @@ function shapePosition(shape: Shape): Vec2 {
   if (shape.type === 'longitude') {
     return { u: shape.u, v: 0 };
   }
+  if (shape.type === 'svg') {
+    return shape.origin;
+  }
   return { u: 0, v: 0 };
 }
 
@@ -203,6 +273,9 @@ function setShapePosition(shape: Shape, u: number, v: number): Shape {
   }
   if (shape.type === 'longitude') {
     return { ...shape, u: clamp01(u) };
+  }
+  if (shape.type === 'svg') {
+    return { ...shape, origin: { u, v } };
   }
   return shape;
 }
@@ -240,6 +313,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
   onDistribute,
 }) => {
   const svgRef = useRef<SVGSVGElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [activeTool, setActiveTool] = useState<Tool>('line');
   const [dragStart, setDragStart] = useState<Vec2 | null>(null);
   const [dragCurrent, setDragCurrent] = useState<Vec2 | null>(null);
@@ -360,7 +434,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
         const newH = Math.max(0.001, size.h + dv);
         updated = { ...movingSnapshot, size: { w: newW, h: newH } };
       } else if (activeHandle === 'circle' && movingSnapshot.type === 'circle') {
-        const radius = Math.max(0.001, movingSnapshot.radius + du); // assume drag mainly horizontal
+        const radius = Math.max(0.001, movingSnapshot.radius + du);
         updated = { ...movingSnapshot, radius };
       } else if (activeHandle === 'line-start' && movingSnapshot.type === 'line') {
         updated = { ...movingSnapshot, a: { u: movingSnapshot.a.u + du, v: movingSnapshot.a.v + dv } };
@@ -370,6 +444,17 @@ export const UVEditor: React.FC<UVEditorProps> = ({
         updated = { ...movingSnapshot, v: clamp01(movingSnapshot.v + dv) };
       } else if (activeHandle === 'longitude' && movingSnapshot.type === 'longitude') {
         updated = { ...movingSnapshot, u: clamp01(movingSnapshot.u + du) };
+      } else if (activeHandle === 'scale' && movingSnapshot.type === 'svg') {
+        const distStart = distance(shapePosition(movingSnapshot), movingStart);
+        const distNow = distance(shapePosition(movingSnapshot), uv);
+        const ratio = distStart > 1e-6 ? distNow / distStart : 1;
+        updated = { ...movingSnapshot, scale: movingSnapshot.scale * ratio };
+      } else if (activeHandle === 'rotate-svg' && movingSnapshot.type === 'svg') {
+        const center = movingSnapshot.origin;
+        const ang = Math.atan2(uv.v - center.v, uv.u - center.u);
+        // We want the handle (which was at -90 deg relative to rotation) to track mouse
+        // So newRotation = ang + 90deg
+        updated = { ...movingSnapshot, rotation: ang + Math.PI / 2 };
       }
 
       onTransformShape(movingId, updated);
@@ -475,6 +560,26 @@ export const UVEditor: React.FC<UVEditorProps> = ({
     resetDrag();
   };
 
+  const handleImportClick = () => {
+    if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
+  };
+
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const text = await file.text();
+    const shape = await parseSvg(text);
+    if (shape) {
+      onAddShape(shape);
+      onSelectShapes([shape.id]);
+    } else {
+      alert('Failed to parse SVG or no paths found.');
+    }
+    e.target.value = ''; // Reset
+  };
+
   return (
     <div className="panel">
       <div className="panel-header">
@@ -490,6 +595,17 @@ export const UVEditor: React.FC<UVEditorProps> = ({
               {tool.toUpperCase()}
             </button>
           ))}
+          <div className="separator" style={{ width: 1, height: 20, background: '#ddd', margin: '0 4px' }} />
+          <button type="button" className="tool-button" onClick={handleImportClick}>
+            Import SVG
+          </button>
+          <input
+            type="file"
+            ref={fileInputRef}
+            style={{ display: 'none' }}
+            accept=".svg"
+            onChange={handleFileChange}
+          />
         </div>
       </div>
       <div className="panel-body">
@@ -541,6 +657,64 @@ export const UVEditor: React.FC<UVEditorProps> = ({
             )}
 
           {scene.shapes.map((shape) => {
+            if (shape.type === 'svg') {
+              const { origin, scale, paths, rotation } = shape;
+              const cos = Math.cos(rotation);
+              const sin = Math.sin(rotation);
+              const transformPt = (p: Vec2) => {
+                const uRot = p.u * cos - p.v * sin;
+                const vRot = p.u * sin + p.v * cos;
+                return { u: origin.u + uRot * scale, v: origin.v + vRot * scale };
+              };
+              
+              // Compute bbox for selection hit area
+              const b = shapeBounds(shape);
+
+              return (
+                <g key={shape.id}>
+                  <g>
+                    {paths.map((path, idx) => {
+                      const pts = path.points.map(transformPt).map((p) => `${p.u},${p.v}`).join(' ');
+                      return (
+                        <polyline
+                          key={idx}
+                          points={pts}
+                          fill={path.fill || 'none'}
+                          stroke={path.stroke}
+                          strokeWidth={path.strokeWidth * scale} // Scale stroke
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      );
+                    })}
+                  </g>
+                  {/* Selection Hit Box */}
+                  <rect
+                    x={b.minU}
+                    y={b.minV}
+                    width={b.maxU - b.minU}
+                    height={b.maxV - b.minV}
+                    fill="transparent"
+                    stroke={selectedIds.includes(shape.id) ? '#2d68ff' : 'transparent'}
+                    strokeWidth={selectedIds.includes(shape.id) ? 0.002 : 0}
+                    pointerEvents="all"
+                    onPointerDown={(e) => {
+                      if (activeTool !== 'select') return;
+                      e.stopPropagation();
+                      const additive = e.metaKey || e.ctrlKey || e.shiftKey;
+                      handleSelectShape(shape.id, additive);
+                      if (additive) return;
+                      onStartShapeTransform();
+                      setMovingId(shape.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(shape);
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </g>
+              );
+            }
+
             if (shape.type === 'line') {
               return (
               <g key={shape.id}>
@@ -947,6 +1121,44 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                   />
                 </>
               )}
+              {primarySelected.type === 'svg' && (
+                <>
+                  <circle
+                    cx={svgScaleHandle(primarySelected).u}
+                    cy={svgScaleHandle(primarySelected).v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(primarySelected.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(primarySelected);
+                      setActiveHandle('scale');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                  <circle
+                    cx={svgRotateHandle(primarySelected).u}
+                    cy={svgRotateHandle(primarySelected).v}
+                    r={0.008}
+                    fill="#ffffff"
+                    stroke="#2d68ff"
+                    strokeWidth={0.0015}
+                    onPointerDown={(e) => {
+                      e.stopPropagation();
+                      onStartShapeTransform();
+                      setMovingId(primarySelected.id);
+                      setMovingStart(svgPointToUV(e, svgRef.current!));
+                      setMovingSnapshot(primarySelected);
+                      setActiveHandle('rotate-svg');
+                      svgRef.current?.setPointerCapture(e.pointerId);
+                    }}
+                  />
+                </>
+              )}
             </g>
           )}
 
@@ -1025,7 +1237,7 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                 <input
                   type="color"
                   value={fillInput}
-                  disabled={selectedShapes.some((s) => s.type === 'line' || s.type === 'latitude' || s.type === 'longitude')}
+                  disabled={selectedShapes.some((s) => s.type === 'line' || s.type === 'latitude' || s.type === 'longitude' || s.type === 'svg')}
                   onChange={(e) => onFillChange(e.target.value)}
                 />
               </label>
@@ -1062,8 +1274,8 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                     U
                     <FreeNumberInput
                       value={primaryPosition?.u ?? 0}
-                      min={0}
-                      max={1}
+                      min={-1}
+                      max={2}
                       decimals={3}
                       onChangeValue={(next) => {
                         if (!primarySelected || !primaryPosition) return;
@@ -1076,8 +1288,8 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                     V
                     <FreeNumberInput
                       value={primaryPosition?.v ?? 0}
-                      min={0}
-                      max={1}
+                      min={-1}
+                      max={2}
                       decimals={3}
                       onChangeValue={(next) => {
                         if (!primarySelected || !primaryPosition) return;
@@ -1170,6 +1382,60 @@ export const UVEditor: React.FC<UVEditorProps> = ({
                           }}
                         />
                       </label>
+                    </>
+                  )}
+                  {primarySelected.type === 'svg' && (
+                    <>
+                      <label className="uv-footer-control">
+                        Scale
+                        <FreeNumberInput
+                          value={primarySelected.scale}
+                          min={0.0001}
+                          decimals={3}
+                          onChangeValue={(next) => {
+                            onStartShapeTransform();
+                            onTransformShape(primarySelected.id, { ...primarySelected, scale: next });
+                          }}
+                        />
+                      </label>
+                      <label className="uv-footer-control">
+                        Rotate
+                        <FreeNumberInput
+                          value={(primarySelected.rotation * 180) / Math.PI}
+                          decimals={1}
+                          onChangeValue={(next) => {
+                            const rad = (next * Math.PI) / 180;
+                            onStartShapeTransform();
+                            onTransformShape(primarySelected.id, { ...primarySelected, rotation: rad });
+                          }}
+                        />
+                      </label>
+                      <div className="uv-footer-control" style={{ flexDirection: 'row', alignItems: 'center', gap: 4 }}>
+                        <input
+                          type="checkbox"
+                          checked={primarySelected.strokeWidthOverride !== null}
+                          onChange={(e) => {
+                            const next = e.target.checked ? 0.002 : null;
+                            onStartShapeTransform();
+                            onTransformShape(primarySelected.id, { ...primarySelected, strokeWidthOverride: next });
+                          }}
+                        />
+                        <span>Override Stroke</span>
+                      </div>
+                      {primarySelected.strokeWidthOverride !== null && (
+                         <label className="uv-footer-control">
+                         Width
+                         <FreeNumberInput
+                           value={primarySelected.strokeWidthOverride}
+                           min={0.0001}
+                           decimals={4}
+                           onChangeValue={(next) => {
+                             onStartShapeTransform();
+                             onTransformShape(primarySelected.id, { ...primarySelected, strokeWidthOverride: next });
+                           }}
+                         />
+                       </label>
+                      )}
                     </>
                   )}
                   {primarySelected.type === 'line' && (

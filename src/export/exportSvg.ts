@@ -1,5 +1,5 @@
 import { Scene } from '../model/scene';
-import { ProjectionType, Rotation, UvOrientation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
+import { ProjectionType, Rotation, UvOrientation, projectShapeToXY, uvPointToXY, projectPointsToXY } from '../geometry/projection';
 
 interface ExportOptions {
   showGuides?: boolean;
@@ -68,6 +68,56 @@ export function exportSphereSvg(
 
   const shapesMarkup = scene.shapes
     .map((shape) => {
+      if (shape.type === 'svg') {
+        const { origin, scale, paths, rotation: shapeRotation } = shape;
+        const cos = Math.cos(shapeRotation);
+        const sin = Math.sin(shapeRotation);
+        return paths.map((path) => {
+          const transformedPoints = path.points.map((p) => {
+             const uRot = p.u * cos - p.v * sin;
+             const vRot = p.u * sin + p.v * cos;
+             return {
+               u: origin.u + uRot * scale,
+               v: origin.v + vRot * scale,
+             };
+          });
+
+          const { points, closed, backPoints } = projectPointsToXY(
+            transformedPoints,
+            path.closed,
+            rotation,
+            projection,
+            orientation,
+            transparentSphere,
+            fadeBackfaces,
+            'svg'
+          );
+
+          if (points.length < 2 && (!fadeBackfaces || !backPoints?.length)) return '';
+
+          const baseWidth = shape.strokeWidthOverride ?? (path.strokeWidth * scale);
+          const strokeWidth = baseWidth * 2;
+          
+          const frontMarkup = points.length >= 2
+            ? closed
+              ? (() => {
+                  const closedPts = ensureClosed(points);
+                  const ptsAttr = formatPoints(closedPts);
+                  const fill = path.fill ?? 'none';
+                  return `<polygon points="${ptsAttr}" fill="${fill}" stroke="${path.stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" />`;
+                })()
+              : `<polyline points="${formatPoints(points)}" fill="none" stroke="${path.stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" />`
+            : '';
+
+          const backMarkup =
+            fadeBackfaces && backPoints && backPoints.length >= 2
+              ? `<polyline points="${formatPoints(backPoints)}" fill="none" stroke="${path.stroke}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" opacity="0.35" />`
+              : '';
+
+          return [backMarkup, frontMarkup].filter(Boolean).join('\n');
+        }).join('\n');
+      }
+
       const sampleDensity = shape.type === 'circle' ? 160 : 120;
       const { points, closed, backPoints } = projectShapeToXY(
         shape,

@@ -1,6 +1,6 @@
 import React, { useMemo } from 'react';
 import { Scene } from '../model/scene';
-import { ProjectionType, Rotation, UvOrientation, projectShapeToXY, uvPointToXY } from '../geometry/projection';
+import { ProjectionType, Rotation, UvOrientation, projectShapeToXY, uvPointToXY, projectPointsToXY } from '../geometry/projection';
 
 interface SpherePreviewProps {
   scene: Scene;
@@ -205,6 +205,84 @@ export const SpherePreview: React.FC<SpherePreviewProps> = ({
 
           <g>
           {scene.shapes.map((shape) => {
+            if (shape.type === 'svg') {
+              const { origin, scale, paths, rotation: shapeRotation } = shape;
+              const cos = Math.cos(shapeRotation);
+              const sin = Math.sin(shapeRotation);
+              return (
+                <g key={shape.id}>
+                  {paths.map((path, idx) => {
+                    const transformedPoints = path.points.map((p) => {
+                      const uRot = p.u * cos - p.v * sin;
+                      const vRot = p.u * sin + p.v * cos;
+                      return {
+                        u: origin.u + uRot * scale,
+                        v: origin.v + vRot * scale,
+                      };
+                    });
+                    
+                    const { points, closed, backPoints } = projectPointsToXY(
+                      transformedPoints,
+                      path.closed,
+                      rotation,
+                      projectionType,
+                      orientation,
+                      transparentSphere,
+                      fadeBackfaces,
+                      'svg'
+                    );
+                    
+                    if (points.length < 2) return null;
+                    const stroke = path.stroke;
+                    // Slightly thicker for visibility on sphere, but respect path width
+                    const baseWidth = shape.strokeWidthOverride ?? (path.strokeWidth * scale);
+                    const strokeWidth = baseWidth * 2; 
+
+                    const pointString = formatPoints(closed ? ensureClosed(points) : points);
+                    const fill = path.fill ?? 'none';
+
+                    if (closed) {
+                      return (
+                        <polygon
+                          key={idx}
+                          points={pointString}
+                          fill={fill}
+                          stroke={stroke}
+                          strokeWidth={strokeWidth}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      );
+                    }
+
+                    return (
+                      <React.Fragment key={idx}>
+                        {fadeBackfaces && backPoints && backPoints.length >= 2 && (
+                          <polyline
+                            points={formatPoints(backPoints)}
+                            fill="none"
+                            stroke={stroke}
+                            strokeWidth={strokeWidth}
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                            opacity={0.35}
+                          />
+                        )}
+                        <polyline
+                          points={pointString}
+                          fill="none"
+                          stroke={stroke}
+                          strokeWidth={strokeWidth}
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </React.Fragment>
+                    );
+                  })}
+                </g>
+              );
+            }
+
             const sampleDensity = shape.type === 'circle' ? 128 : 96;
             const { points, closed, backPoints } = projectShapeToXY(
               shape,

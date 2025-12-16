@@ -54,7 +54,9 @@ const App: React.FC = () => {
 
   useEffect(() => {
     if (!primarySelected) return;
-    setStrokeInput(primarySelected.stroke);
+    if (primarySelected.type !== 'svg') {
+      setStrokeInput(primarySelected.stroke);
+    }
     if (primarySelected.type === 'rect' || primarySelected.type === 'circle' || primarySelected.type === 'polygon') {
       setFillInput(primarySelected.fill ?? '#e5e5e5');
     }
@@ -69,7 +71,9 @@ const App: React.FC = () => {
     pushHistory();
     setScene((prev) => ({ shapes: [...prev.shapes, shape] }));
     setSelectedIds([shape.id]);
-    setStrokeInput(shape.stroke);
+    if (shape.type !== 'svg') {
+      setStrokeInput(shape.stroke);
+    }
     if (shape.type === 'rect' || shape.type === 'circle') {
       setFillInput(shape.fill ?? '#e5e5e5');
     }
@@ -143,7 +147,32 @@ const App: React.FC = () => {
     if (shape.type === 'latitude') {
       return { minU: 0, maxU: 1, minV: shape.v, maxV: shape.v };
     }
-    return { minU: shape.u, maxU: shape.u, minV: 0, maxV: 1 };
+    if (shape.type === 'longitude') {
+      return { minU: shape.u, maxU: shape.u, minV: 0, maxV: 1 };
+    }
+    if (shape.type === 'svg') {
+      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+      if (shape.paths.length === 0) {
+        return { minU: shape.origin.u, maxU: shape.origin.u, minV: shape.origin.v, maxV: shape.origin.v };
+      }
+      const cos = Math.cos(shape.rotation);
+      const sin = Math.sin(shape.rotation);
+      for (const path of shape.paths) {
+        for (const pt of path.points) {
+          const uRot = pt.u * cos - pt.v * sin;
+          const vRot = pt.u * sin + pt.v * cos;
+          const uFinal = shape.origin.u + uRot * shape.scale;
+          const vFinal = shape.origin.v + vRot * shape.scale;
+          
+          if (uFinal < minU) minU = uFinal;
+          if (uFinal > maxU) maxU = uFinal;
+          if (vFinal < minV) minV = vFinal;
+          if (vFinal > maxV) maxV = vFinal;
+        }
+      }
+      return { minU, maxU, minV, maxV };
+    }
+    return { minU: 0, maxU: 0, minV: 0, maxV: 0 };
   };
 
   const moveShapeBy = (shape: Shape, du: number, dv: number): Shape => {
@@ -165,6 +194,9 @@ const App: React.FC = () => {
     if (shape.type === 'longitude') {
       return { ...shape, u: shape.u + du };
     }
+    if (shape.type === 'svg') {
+      return { ...shape, origin: { u: shape.origin.u + du, v: shape.origin.v + dv } };
+    }
     return shape;
   };
 
@@ -174,7 +206,9 @@ const App: React.FC = () => {
     if (shape.type === 'polygon') return shape.center;
     if (shape.type === 'circle') return shape.center;
     if (shape.type === 'latitude') return { u: 0.5, v: shape.v };
-    return { u: shape.u, v: 0.5 };
+    if (shape.type === 'longitude') return { u: shape.u, v: 0.5 };
+    if (shape.type === 'svg') return shape.origin;
+    return { u: 0, v: 0 };
   };
 
   const setShapeCenter = (shape: Shape, u: number, v: number): Shape => {
@@ -424,13 +458,16 @@ const App: React.FC = () => {
           onStrokeChange={(value) => {
             setStrokeInput(value);
             if (!selectedIds.length) return;
-            updateSelectedShapes((s) => ({ ...s, stroke: value }));
+            updateSelectedShapes((s) => {
+               if (s.type === 'svg') return s; 
+               return { ...s, stroke: value }
+            });
           }}
           onFillChange={(value) => {
             setFillInput(value);
             if (!selectedIds.length) return;
             updateSelectedShapes((s) => {
-              if (s.type === 'line' || s.type === 'latitude' || s.type === 'longitude') return s;
+              if (s.type === 'line' || s.type === 'latitude' || s.type === 'longitude' || s.type === 'svg') return s;
               return { ...s, fill: value };
             });
           }}

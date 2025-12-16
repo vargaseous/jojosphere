@@ -211,6 +211,9 @@ export function tessellateShape(shape: Shape, samples = 32): TessellatedShape {
   if (shape.type === 'longitude') {
     return sampleLongitude(shape, samples);
   }
+  if (shape.type === 'svg') {
+    return { points: [], closed: false };
+  }
   return sampleCircle(shape, samples);
 }
 
@@ -449,21 +452,21 @@ function clipFillWithArcs(points: Vec2XY[]): Vec2XY[] {
   return output;
 }
 
-export function projectShapeToXY(
-  shape: Shape,
+export function projectPointsToXY(
+  uvPoints: Vec2[],
+  closed: boolean,
   rotation: Rotation,
-  samples = 32,
   projection: ProjectionType = 'orthographic',
   orientation?: UvOrientation,
   includeBackFaces = false,
   splitBackFaces = false,
+  shapeType?: Shape['type'],
 ): { points: Vec2XY[]; backPoints?: Vec2XY[]; closed: boolean } {
-  const { points: uvPoints, closed } = tessellateShape(shape, samples);
   const rotated: Vec3[] = uvPoints.map((uv) => {
     const oriented = orientUV(uv, orientation);
     return applyRotation(uvToSphere(oriented.u, oriented.v), rotation);
   });
-  const isGreatCircle = shape.type === 'latitude' || shape.type === 'longitude';
+  const isGreatCircle = shapeType === 'latitude' || shapeType === 'longitude';
   if (includeBackFaces && splitBackFaces) {
     const front: Vec2XY[] = [];
     const back: Vec2XY[] = [];
@@ -499,9 +502,38 @@ export function projectShapeToXY(
     if (xy) projected.push(xy);
   }
 
-  if (closed && shape.type !== 'line' && projection === 'orthographic') {
+  if (closed && shapeType !== 'line' && projection === 'orthographic') {
     projected = clipFillWithArcs(projected);
   }
 
   return { points: projected, closed };
+}
+
+export function projectShapeToXY(
+  shape: Shape,
+  rotation: Rotation,
+  samples = 32,
+  projection: ProjectionType = 'orthographic',
+  orientation?: UvOrientation,
+  includeBackFaces = false,
+  splitBackFaces = false,
+): { points: Vec2XY[]; backPoints?: Vec2XY[]; closed: boolean } {
+  // SVG shapes are handled by iterating their paths externally or by a specialized call,
+  // but if passed here, we can't easily handle the multi-path nature in one return object
+  // without changing the signature. For now, we assume this is called for primitive shapes.
+  if (shape.type === 'svg') {
+    return { points: [], closed: false };
+  }
+
+  const { points: uvPoints, closed } = tessellateShape(shape, samples);
+  return projectPointsToXY(
+    uvPoints,
+    closed,
+    rotation,
+    projection,
+    orientation,
+    includeBackFaces,
+    splitBackFaces,
+    shape.type,
+  );
 }
